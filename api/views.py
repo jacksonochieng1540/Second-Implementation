@@ -10,10 +10,13 @@ from .models import VehicleCommand, EventLog
 from .serializers import VehicleCommandSerializer
 from vehicle_tracking.models import VehicleLocation
 from alerts.models import Alert
-from django.contrib.auth.models import User  # Add this import
+from django.contrib.auth.models import User
+
+# Import the correct face recognizer (TRUE face recognition)
+from authentication.true_face_recognizer import face_recognizer
 
 @api_view(['POST'])
-@permission_classes([AllowAny])  # CHANGE THIS: from IsAuthenticated to AllowAny
+@permission_classes([AllowAny])
 def send_command(request):
     command = request.data.get('command')
     
@@ -65,22 +68,20 @@ def send_command(request):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def face_auth(request):
-    """Face authentication endpoint - Creates UNLOCK command on success"""
-    from authentication.face_recognizer import face_recognizer
-    from django.contrib.auth.models import User
-    from .models import VehicleCommand, EventLog
-    from channels.layers import get_channel_layer
-    from asgiref.sync import async_to_sync
+    """Face authentication - ONLY registered user can unlock"""
+    from authentication.real_face_matcher import face_matcher
     
     face_image = request.data.get('face_image')
     
     if not face_image:
-        return Response({'error': 'Face image required'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'error': 'Face image required'}, status=400)
     
-    print("Processing face authentication...")
+    print("\n" + "🔐"*25)
+    print("FACE AUTHENTICATION FOR ENGINE UNLOCK")
+    print("🔐"*25)
     
-    # Authenticate face
-    username, message = face_recognizer.authenticate_face(face_image)
+    # This will ONLY return username if face MATCHES a registered face
+    username, message = face_matcher.authenticate_face(face_image)
     
     if username:
         try:
@@ -89,52 +90,31 @@ def face_auth(request):
             # Create UNLOCK command
             command = VehicleCommand.objects.create(command='UNLOCK', user=user)
             
-            EventLog.objects.create(
-                user=user,
-                event_type='FACE_AUTH',
-                description=f"Face authentication successful for {user.username}"
-            )
-            
-            print(f"✅ Face recognized: {username} - UNLOCK command #{command.id} created")
-            
-            # Broadcast via WebSocket
-            channel_layer = get_channel_layer()
-            async_to_sync(channel_layer.group_send)(
-                'vehicle_tracking',
-                {
-                    'type': 'command_update',
-                    'data': {
-                        'command': 'UNLOCK',
-                        'status': 'pending',
-                        'user': user.username,
-                        'timestamp': command.timestamp.isoformat()
-                    }
-                }
-            )
+            print(f"\n✅✅✅ AUTHENTICATED: {username} ✅✅✅")
+            print(f"UNLOCK command #{command.id} created")
             
             return Response({
                 'success': True,
                 'message': f'Welcome {username}! Engine unlocking...',
                 'user': username
-            }, status=status.HTTP_200_OK)
+            }, status=200)
             
         except User.DoesNotExist:
-            pass
+            print(f"User {username} not found in database")
+    
+    print(f"\n❌❌❌ ACCESS DENIED: {message} ❌❌❌")
     
     # Create alert for unauthorized access
-    from alerts.models import Alert
     Alert.objects.create(
-        title='Unauthorized Face Access Attempt',
-        description='An unrecognized face attempted to access the vehicle',
+        title='UNAUTHORIZED ACCESS ATTEMPT',
+        description=f'An unrecognized person attempted to access the vehicle. {message}',
         severity='HIGH'
     )
     
-    print(f"❌ Unauthorized face detected - Alert created")
-    
     return Response({
         'success': False,
-        'message': 'Face not recognized - Access denied'
-    }, status=status.HTTP_401_UNAUTHORIZED)
+        'message': 'Access denied - Face not recognized'
+    }, status=401) 
     
 @api_view(['POST'])
 @permission_classes([AllowAny])
