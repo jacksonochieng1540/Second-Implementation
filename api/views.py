@@ -65,30 +65,24 @@ def send_command(request):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def face_auth(request):
-    """Face authentication endpoint - REAL face matching"""
-    from authentication.face_utils import face_auth as face_authenticator
+    """Face authentication endpoint - Creates UNLOCK command on success"""
+    from authentication.face_recognizer import face_recognizer
+    from django.contrib.auth.models import User
+    from .models import VehicleCommand, EventLog
+    from channels.layers import get_channel_layer
+    from asgiref.sync import async_to_sync
     
     face_image = request.data.get('face_image')
     
     if not face_image:
         return Response({'error': 'Face image required'}, status=status.HTTP_400_BAD_REQUEST)
     
-    # Extract face hash
-    face_hash = face_authenticator.extract_face_hash(face_image)
+    print("Processing face authentication...")
     
-    if face_hash is None:
-        return Response({
-            'success': False,
-            'message': 'No face detected. Please look at the camera.'
-        }, status=status.HTTP_400_BAD_REQUEST)
-    
-    # Find matching user
-    username = face_authenticator.authenticate_face(face_hash)
+    # Authenticate face
+    username, message = face_recognizer.authenticate_face(face_image)
     
     if username:
-        from django.contrib.auth.models import User
-        from .models import VehicleCommand, EventLog
-        
         try:
             user = User.objects.get(username=username)
             
@@ -101,7 +95,22 @@ def face_auth(request):
                 description=f"Face authentication successful for {user.username}"
             )
             
-            print(f"✅ Face recognized: {username} - UNLOCK command created")
+            print(f"✅ Face recognized: {username} - UNLOCK command #{command.id} created")
+            
+            # Broadcast via WebSocket
+            channel_layer = get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                'vehicle_tracking',
+                {
+                    'type': 'command_update',
+                    'data': {
+                        'command': 'UNLOCK',
+                        'status': 'pending',
+                        'user': user.username,
+                        'timestamp': command.timestamp.isoformat()
+                    }
+                }
+            )
             
             return Response({
                 'success': True,
@@ -126,7 +135,6 @@ def face_auth(request):
         'success': False,
         'message': 'Face not recognized - Access denied'
     }, status=status.HTTP_401_UNAUTHORIZED)
-
     
 @api_view(['POST'])
 @permission_classes([AllowAny])
