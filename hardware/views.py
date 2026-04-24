@@ -19,7 +19,7 @@ def get_command(request):
     if not verify_hardware_api_key(request):
         return Response({'error': 'Invalid API key'}, status=status.HTTP_401_UNAUTHORIZED)
     
-    # Get oldest pending command
+    
     command = VehicleCommand.objects.filter(executed=False).first()
     
     if command:
@@ -45,7 +45,7 @@ def mark_executed(request):
         command.executed_at = timezone.now()
         command.save()
         
-        # Log execution
+        
         EventLog.objects.create(
             user=command.user,
             event_type='COMMAND_EXECUTED',
