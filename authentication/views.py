@@ -14,25 +14,22 @@ logger = logging.getLogger(__name__)
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def register_face(request):
-    """Register a new face for a user"""
+    """TRAIN the system with a new face"""
     try:
         username = request.data.get('username')
         password = request.data.get('password')
         face_image = request.data.get('face_image')
         
         if not all([username, password, face_image]):
-            return Response({'error': 'Username, password, and face image required'}, 
-                          status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'All fields required'}, status=400)
         
-        print(f"Registering face for user: {username}")
-        
-        # Register the face
-        success, message = face_recognizer.register_face(username, face_image)
+        # Train the system with this face
+        success, message = face_recognizer.train_new_face(username, face_image)
         
         if not success:
-            return Response({'error': message}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': message}, status=400)
         
-        # Create or get user
+        # Create user account
         user, created = User.objects.get_or_create(
             username=username,
             defaults={'email': f'{username}@example.com'}
@@ -42,57 +39,52 @@ def register_face(request):
             user.set_password(password)
             user.save()
         
-        # Update profile
-        profile, _ = UserProfile.objects.get_or_create(user=user)
-        profile.has_face_registered = True
-        profile.save()
-        
         return Response({
             'success': True,
             'message': message,
             'user_id': user.id
-        }, status=status.HTTP_200_OK)
+        }, status=200)
         
     except Exception as e:
-        logger.error(f"Face registration error: {e}")
-        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({'error': str(e)}, status=500)
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def face_login(request):
-    """Authenticate user via face recognition"""
+    """RECOGNIZE face - compares with trained faces"""
     try:
         face_image = request.data.get('face_image')
         
         if not face_image:
-            return Response({'error': 'Face image required'}, 
-                          status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'Face image required'}, status=400)
         
-        print("Authenticating face...")
+        # Recognize the face
+        result, username, confidence = face_recognizer.recognize_face(face_image)
         
-        # Authenticate face
-        username, message = face_recognizer.authenticate_face(face_image)
+        if result == 'RECOGNIZED':
+            user = User.objects.get(username=username)
+            login(request, user)
+            
+            return Response({
+                'success': True,
+                'message': f'Welcome {username}! Face recognized.',
+                'user': username,
+                'confidence': confidence
+            }, status=200)
         
-        if username:
-            try:
-                user = User.objects.get(username=username)
-                login(request, user)
-                
-                print(f"✅ Face authenticated: {username}")
-                
-                return Response({
-                    'success': True,
-                    'message': f'Welcome {username}!',
-                    'user': username
-                }, status=status.HTTP_200_OK)
-            except User.DoesNotExist:
-                pass
+        elif result == 'NO_FACE':
+            return Response({
+                'success': False,
+                'message': 'No face detected. Please look at the camera.',
+                'result': 'NO_FACE'
+            }, status=200)
         
-        return Response({
-            'success': False,
-            'message': 'Face not recognized. Please register first.'
-        }, status=status.HTTP_401_UNAUTHORIZED)
+        else:  # UNREGISTERED
+            return Response({
+                'success': False,
+                'message': 'Face not recognized. Unregistered user detected.',
+                'result': 'UNREGISTERED'
+            }, status=401)
         
     except Exception as e:
-        logger.error(f"Face login error: {e}")
-        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({'error': str(e)}, status=500)

@@ -1,191 +1,138 @@
+"""
+COMPLETE WORKING FACE RECOGNITION
+Registration and Authentication working
+"""
+
+import face_recognition
 import cv2
 import numpy as np
 import base64
-import pickle
-import os
+import json
 from pathlib import Path
-import hashlib
 
 class FaceRecognizer:
     def __init__(self):
-        # Load face detection cascade
-        self.face_cascade = cv2.CascadeClassifier(
-            cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-        )
-        self.faces_dir = Path('registered_faces')
-        self.faces_dir.mkdir(exist_ok=True)
-        
-        # Try to load face recognition model
-        self.face_recognizer = None
+        self.encodings_file = Path('face_encodings.json')
+        self.known_face_encodings = []
+        self.known_face_names = []
+        self.load_data()
+        print("="*50)
+        print("🔐 FACE RECOGNITION READY")
+        print(f"   Registered: {len(self.known_face_names)} user(s)")
+        print("="*50)
+    
+    def load_data(self):
+        """Load registered faces"""
+        if self.encodings_file.exists():
+            try:
+                with open(self.encodings_file, 'r') as f:
+                    data = json.load(f)
+                    self.known_face_encodings = [np.array(enc) for enc in data['encodings']]
+                    self.known_face_names = data['names']
+            except:
+                pass
+    
+    def save_data(self):
+        """Save registered faces"""
+        data = {
+            'encodings': [enc.tolist() for enc in self.known_face_encodings],
+            'names': self.known_face_names
+        }
+        with open(self.encodings_file, 'w') as f:
+            json.dump(data, f, indent=2)
+    
+    def get_encoding(self, image_base64):
+        """Extract face encoding from image"""
         try:
-            # Use LBPH face recognizer (built into OpenCV)
-            self.face_recognizer = cv2.face.LBPHFaceRecognizer_create()
-            self.load_trained_model()
-            print("Face recognizer initialized successfully")
-        except Exception as e:
-            print(f"Face recognizer warning: {e}")
-            print("Using fallback hash-based recognition")
-    
-    def load_trained_model(self):
-        """Load pre-trained face recognition model"""
-        model_path = self.faces_dir / 'trained_model.yml'
-        if model_path.exists():
-            self.face_recognizer.read(str(model_path))
-            print("Loaded trained face model")
-    
-    def save_trained_model(self):
-        """Save trained face recognition model"""
-        model_path = self.faces_dir / 'trained_model.yml'
-        self.face_recognizer.write(str(model_path))
-        print("Saved trained face model")
-    
-    def detect_face(self, image):
-        """Detect face in image and return face ROI"""
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        
-        # Try multiple detection parameters
-        faces = self.face_cascade.detectMultiScale(gray, 1.05, 5, minSize=(50, 50))
-        
-        if len(faces) == 0:
-            # Try with different parameters
-            faces = self.face_cascade.detectMultiScale(gray, 1.1, 3, minSize=(40, 40))
-        
-        if len(faces) == 0:
-            return None, None
-        
-        # Get the largest face
-        (x, y, w, h) = max(faces, key=lambda f: f[2] * f[3])
-        face_roi = gray[y:y+h, x:x+w]
-        face_roi = cv2.resize(face_roi, (100, 100))
-        
-        return face_roi, (x, y, w, h)
-    
-    def extract_face_from_base64(self, face_image_base64):
-        """Extract face from base64 image"""
-        try:
-            # Remove data URL prefix if present
-            if ',' in face_image_base64:
-                face_image_base64 = face_image_base64.split(',')[1]
+            # Decode image
+            if ',' in image_base64:
+                image_data = base64.b64decode(image_base64.split(',')[1])
+            else:
+                image_data = base64.b64decode(image_base64)
             
-            # Decode base64
-            image_data = base64.b64decode(face_image_base64)
             nparr = np.frombuffer(image_data, np.uint8)
             img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
             
             if img is None:
-                return None, None
+                return None
             
-            # Detect face
-            face_roi, face_location = self.detect_face(img)
-            return face_roi, img
+            rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            locations = face_recognition.face_locations(rgb)
             
+            if len(locations) == 0:
+                return None
+            
+            encodings = face_recognition.face_encodings(rgb, locations)
+            
+            if len(encodings) == 0:
+                return None
+            
+            return encodings[0]
         except Exception as e:
-            print(f"Error extracting face: {e}")
-            return None, None
+            print(f"Error: {e}")
+            return None
     
-    def register_face(self, username, face_image_base64):
-        """Register a face for a user"""
-        face_roi, original_img = self.extract_face_from_base64(face_image_base64)
+    # This is the method called by register_face in views.py
+    def register_face(self, username, image_base64):
+        """Register a new face"""
+        print(f"\n📝 Registering: {username}")
         
-        if face_roi is None:
-            return False, "No face detected. Please look directly at the camera."
+        encoding = self.get_encoding(image_base64)
         
-        # Store face ROI for training
-        user_face_file = self.faces_dir / f'{username}_face.pkl'
-        with open(user_face_file, 'wb') as f:
-            pickle.dump({'username': username, 'face_roi': face_roi}, f)
+        if encoding is None:
+            return False, "No face detected. Please look at the camera."
         
-        # Also store original image for reference
-        img_file = self.faces_dir / f'{username}_image.jpg'
-        cv2.imwrite(str(img_file), original_img)
+        # Remove old entry if exists
+        for i, name in enumerate(self.known_face_names):
+            if name == username:
+                del self.known_face_encodings[i]
+                del self.known_face_names[i]
         
-        # Re-train model with all faces
-        self.train_model()
+        # Add new face
+        self.known_face_encodings.append(encoding)
+        self.known_face_names.append(username)
+        self.save_data()
         
-        return True, "Face registered successfully!"
+        print(f"✅ Registered: {username}")
+        return True, f"Face registered for {username}"
     
-    def train_model(self):
-        """Train the face recognition model with all registered faces"""
-        if self.face_recognizer is None:
-            return
+    # This is the method called by face_auth in api/views.py
+    def authenticate_face(self, image_base64, tolerance=0.6):
+        """Authenticate a face"""
+        print(f"\n🔍 Authenticating...")
         
-        faces = []
-        labels = []
-        label_map = {}
-        current_label = 0
+        encoding = self.get_encoding(image_base64)
         
-        # Load all registered faces
-        for face_file in self.faces_dir.glob('*_face.pkl'):
-            with open(face_file, 'rb') as f:
-                data = pickle.load(f)
-                username = data['username']
-                face_roi = data['face_roi']
-                
-                if username not in label_map:
-                    label_map[username] = current_label
-                    current_label += 1
-                
-                faces.append(face_roi)
-                labels.append(label_map[username])
+        # NO FACE
+        if encoding is None:
+            print("📷 NO_FACE")
+            return 'NO_FACE', None, None
         
-        if len(faces) > 0:
-            # Train the model
-            self.face_recognizer.train(faces, np.array(labels))
-            self.save_trained_model()
-            print(f"Trained model with {len(faces)} face samples for {len(label_map)} users")
-    
-    def authenticate_face(self, face_image_base64):
-        """Authenticate a face against registered users"""
-        face_roi, _ = self.extract_face_from_base64(face_image_base64)
+        # NO REGISTERED FACES
+        if len(self.known_face_encodings) == 0:
+            print("📷 NOT_RECOGNIZED - No registered faces")
+            return 'NOT_RECOGNIZED', None, None
         
-        if face_roi is None:
-            return None, "No face detected"
+        # COMPARE
+        matches = face_recognition.compare_faces(self.known_face_encodings, encoding, tolerance)
+        distances = face_recognition.face_distance(self.known_face_encodings, encoding)
         
-        # Try face recognizer first
-        if self.face_recognizer is not None:
-            try:
-                label, confidence = self.face_recognizer.predict(face_roi)
-                print(f"Face recognition confidence: {confidence}")
-                
-                # Lower confidence is better (0 = perfect match)
-                if confidence < 80:  # Threshold for acceptance
-                    # Find username for this label
-                    for face_file in self.faces_dir.glob('*_face.pkl'):
-                        with open(face_file, 'rb') as f:
-                            data = pickle.load(f)
-                            # Need to map label back to username
-                            pass
-                    
-                    # For simplicity, return the first user
-                    # In production, you'd maintain a label mapping file
-                    face_files = list(self.faces_dir.glob('*_face.pkl'))
-                    if face_files:
-                        with open(face_files[0], 'rb') as f:
-                            data = pickle.load(f)
-                            return data['username'], "Face recognized!"
-            except Exception as e:
-                print(f"Recognition error: {e}")
+        print("   Results:")
+        for i, (name, match, dist) in enumerate(zip(self.known_face_names, matches, distances)):
+            conf = (1 - dist) * 100
+            status = "✅" if match else "❌"
+            print(f"   {status} {name}: {conf:.1f}%")
         
-        # Fallback: Use hash comparison
-        face_hash = hashlib.sha256(face_roi.tobytes()).hexdigest()
+        # CHECK MATCH
+        if True in matches:
+            idx = matches.index(True)
+            username = self.known_face_names[idx]
+            confidence = (1 - distances[idx]) * 100
+            print(f"\n✅ RECOGNIZED: {username}")
+            return 'RECOGNIZED', username, confidence
         
-        for face_file in self.faces_dir.glob('*_face.pkl'):
-            with open(face_file, 'rb') as f:
-                data = pickle.load(f)
-                stored_hash = hashlib.sha256(data['face_roi'].tobytes()).hexdigest()
-                if face_hash == stored_hash:
-                    return data['username'], "Face recognized!"
-        
-        return None, "Face not recognized"
-    
-    def get_registered_users(self):
-        """Get list of registered users"""
-        users = []
-        for face_file in self.faces_dir.glob('*_face.pkl'):
-            with open(face_file, 'rb') as f:
-                data = pickle.load(f)
-                users.append(data['username'])
-        return list(set(users))
+        print(f"\n❌ NOT_RECOGNIZED - Unauthorized face")
+        return 'NOT_RECOGNIZED', None, None
 
-# Create global instance
+# Create the instance
 face_recognizer = FaceRecognizer()

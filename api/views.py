@@ -10,10 +10,13 @@ from .models import VehicleCommand, EventLog
 from .serializers import VehicleCommandSerializer
 from vehicle_tracking.models import VehicleLocation
 from alerts.models import Alert
-from django.contrib.auth.models import User  # Add this import
+from django.contrib.auth.models import User
+
+# Import the working face recognizer
+from authentication.face_recognizer import face_recognizer
 
 @api_view(['POST'])
-@permission_classes([AllowAny])  # CHANGE THIS: from IsAuthenticated to AllowAny
+@permission_classes([AllowAny])
 def send_command(request):
     command = request.data.get('command')
     
@@ -65,76 +68,73 @@ def send_command(request):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def face_auth(request):
-    """Face authentication endpoint - Creates UNLOCK command on success"""
+    """Face authentication - Distinguishes registered vs unregistered faces"""
     from authentication.face_recognizer import face_recognizer
-    from django.contrib.auth.models import User
-    from .models import VehicleCommand, EventLog
-    from channels.layers import get_channel_layer
-    from asgiref.sync import async_to_sync
+    from .models import VehicleCommand
+    from alerts.models import Alert
     
     face_image = request.data.get('face_image')
     
     if not face_image:
-        return Response({'error': 'Face image required'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'error': 'Face image required'}, status=400)
     
-    print("Processing face authentication...")
+    print("\n" + "="*50)
+    print("🔐 FACE AUTHENTICATION")
+    print("="*50)
     
-    # Authenticate face
-    username, message = face_recognizer.authenticate_face(face_image)
+    # Recognize the face
+    result, username, confidence = face_recognizer.recognize_face(face_image)
     
-    if username:
+    # CASE 1: RECOGNIZED - Registered user (Trained face)
+    if result == 'RECOGNIZED':
+        user = User.objects.get(username=username)
+        command = VehicleCommand.objects.create(command='UNLOCK', user=user)
+        
+        print(f"\n✅ RESULT: REGISTERED USER - {username}")
+        print(f"🔓 UNLOCK command #{command.id} created")
+        
+        return Response({
+            'success': True,
+            'message': f'Welcome {username}! Engine unlocking...',
+            'user': username,
+            'result': 'RECOGNIZED'
+        }, status=200)
+    
+    # CASE 2: NO FACE DETECTED
+    elif result == 'NO_FACE':
+        print(f"\n📷 RESULT: NO FACE DETECTED")
+        return Response({
+            'success': False,
+            'message': 'No face detected',
+            'result': 'NO_FACE'
+        }, status=200)
+    
+    # CASE 3: UNREGISTERED FACE - Not trained
+    elif result == 'UNREGISTERED':
+        print(f"\n🚫 RESULT: UNREGISTERED FACE DETECTED")
+        
+        # Create alert for unauthorized access
+        alert = Alert.objects.create(
+            title='UNAUTHORIZED ACCESS ATTEMPT',
+            description='An unregistered face attempted to access the vehicle',
+            severity='HIGH'
+        )
+        
+        # Send SMS alert
         try:
-            user = User.objects.get(username=username)
-            
-            # Create UNLOCK command
-            command = VehicleCommand.objects.create(command='UNLOCK', user=user)
-            
-            EventLog.objects.create(
-                user=user,
-                event_type='FACE_AUTH',
-                description=f"Face authentication successful for {user.username}"
-            )
-            
-            print(f"✅ Face recognized: {username} - UNLOCK command #{command.id} created")
-            
-            # Broadcast via WebSocket
-            channel_layer = get_channel_layer()
-            async_to_sync(channel_layer.group_send)(
-                'vehicle_tracking',
-                {
-                    'type': 'command_update',
-                    'data': {
-                        'command': 'UNLOCK',
-                        'status': 'pending',
-                        'user': user.username,
-                        'timestamp': command.timestamp.isoformat()
-                    }
-                }
-            )
-            
-            return Response({
-                'success': True,
-                'message': f'Welcome {username}! Engine unlocking...',
-                'user': username
-            }, status=status.HTTP_200_OK)
-            
-        except User.DoesNotExist:
-            pass
+            from alerts.sms_handler import gsm_handler
+            owner_phone = '+254792333250'
+            gsm_handler.send_sms(owner_phone, f"🚨 ALERT! Unregistered person attempting to access your vehicle!")
+        except Exception as e:
+            print(f"SMS error: {e}")
+        
+        return Response({
+            'success': False,
+            'message': 'Unregistered face detected - Access denied. Alert triggered.',
+            'result': 'UNREGISTERED'
+        }, status=401)
     
-    # Create alert for unauthorized access
-    from alerts.models import Alert
-    Alert.objects.create(
-        title='Unauthorized Face Access Attempt',
-        description='An unrecognized face attempted to access the vehicle',
-        severity='HIGH'
-    )
-    
-    print(f"❌ Unauthorized face detected - Alert created")
-    
-    return Response({
-        'success': False,
-        'message': 'Face not recognized - Access denied'
-    }, status=status.HTTP_401_UNAUTHORIZED)
+    return Response({'success': False, 'message': 'Unknown error'}, status=500)
     
 @api_view(['POST'])
 @permission_classes([AllowAny])

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Complete Vehicle Security System for Raspberry Pi
-Implements: Face Recognition, GPS Tracking, Relay Control, GSM Alerts
+Works with web dashboard - Controls relay via GPIO27
 """
 
 import requests
@@ -11,24 +11,22 @@ import base64
 import cv2
 import numpy as np
 import RPi.GPIO as GPIO
-import serial
 import gpsd
-import hashlib
+import serial
 from datetime import datetime
 import threading
-import queue
 import logging
 
-# ============= CONFIGURATION =============
-API_BASE_URL = "http://your-server-ip:8000"  # Replace with your cloud server IP
-API_KEY = "your-hardware-api-key-2024"
-RELAY_PIN = 17  # GPIO pin for engine relay
-CAMERA_DEVICE = 0  # USB camera device
-GPS_UPDATE_INTERVAL = 3  # seconds
-COMMAND_POLL_INTERVAL = 2  # seconds
-INTRUDER_CHECK_INTERVAL = 10  # seconds
-GSM_PORT = '/dev/ttyUSB0'  # USB GSM module
-OWNER_PHONE = '+254700000000'  # Replace with owner's phone number
+# ============= CONFIGURATION - CHANGE THESE =============
+API_BASE_URL = "http://10.251.159.57:8000"  # YOUR LAPTOP IP ADDRESS
+API_KEY = "mysecurekey123"  # Must match Django settings
+RELAY_PIN = 27  # GPIO27 (Physical pin 13) - the pin that worked in your test
+CAMERA_DEVICE = 0
+GPS_UPDATE_INTERVAL = 3
+COMMAND_POLL_INTERVAL = 2
+INTRUDER_CHECK_INTERVAL = 10
+GSM_PORT = '/dev/ttyUSB0'
+OWNER_PHONE = "+254792333250"  # YOUR PHONE NUMBER
 
 # Setup logging
 logging.basicConfig(
@@ -42,23 +40,24 @@ class VehicleHardware:
     def __init__(self):
         self.engine_locked = True
         self.current_location = None
+        self.gsm_available = False
+        self.camera = None
+        
         self.setup_gpio()
         self.setup_gps()
         self.setup_gsm()
         self.setup_camera()
         
     def setup_gpio(self):
-        """Setup GPIO for relay control"""
         try:
             GPIO.setmode(GPIO.BCM)
             GPIO.setup(RELAY_PIN, GPIO.OUT)
-            GPIO.output(RELAY_PIN, GPIO.LOW)  # Engine locked by default
-            logger.info("✓ GPIO configured - Engine LOCKED")
+            GPIO.output(RELAY_PIN, GPIO.LOW)
+            logger.info(f"✓ GPIO configured - Engine LOCKED (Pin GPIO{RELAY_PIN})")
         except Exception as e:
-            logger.error(f"GPIO setup error: {e}")
+            logger.error(f"GPIO error: {e}")
     
     def setup_gps(self):
-        """Setup GPS module"""
         try:
             gpsd.connect()
             logger.info("✓ GPS module connected")
@@ -66,26 +65,29 @@ class VehicleHardware:
             logger.warning(f"GPS not available: {e}")
     
     def setup_gsm(self):
-        """Setup GSM module for SMS"""
-        self.gsm_available = False
         try:
-            self.gsm = serial.Serial(GSM_PORT, 9600, timeout=1)
-            time.sleep(2)
-            self.gsm.write(b'AT\r\n')
-            if b'OK' in self.gsm.read(100):
-                self.gsm_available = True
-                logger.info("✓ GSM module connected")
-            else:
-                logger.warning("GSM module not responding")
+            for port in ['/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyACM0']:
+                try:
+                    self.gsm = serial.Serial(port, 9600, timeout=1)
+                    time.sleep(2)
+                    self.gsm.write(b'AT\r\n')
+                    if b'OK' in self.gsm.read(100):
+                        self.gsm_available = True
+                        logger.info(f"✓ GSM connected on {port}")
+                        break
+                    self.gsm.close()
+                except:
+                    continue
+            if not self.gsm_available:
+                logger.warning("GSM not found - SMS simulated")
         except Exception as e:
-            logger.warning(f"GSM not available: {e}")
+            logger.warning(f"GSM error: {e}")
     
     def setup_camera(self):
-        """Setup camera for face recognition"""
         try:
             self.camera = cv2.VideoCapture(CAMERA_DEVICE)
             if self.camera.isOpened():
-                logger.info("✓ Camera initialized")
+                logger.info("✓ USB Camera ready")
             else:
                 logger.warning("Camera not available")
                 self.camera = None
@@ -94,102 +96,83 @@ class VehicleHardware:
             self.camera = None
     
     def lock_engine(self):
-        """Lock the engine (immobilize vehicle)"""
         try:
             GPIO.output(RELAY_PIN, GPIO.LOW)
             self.engine_locked = True
-            logger.info("🔒 Engine LOCKED - Vehicle immobilized")
+            logger.info("🔒 ENGINE LOCKED - Relay OFF")
+            self.send_sms("VEHICLE LOCKED")
             return True
         except Exception as e:
-            logger.error(f"Lock engine error: {e}")
+            logger.error(f"Lock error: {e}")
             return False
     
     def unlock_engine(self):
-        """Unlock the engine (allow vehicle operation)"""
         try:
             GPIO.output(RELAY_PIN, GPIO.HIGH)
             self.engine_locked = False
-            logger.info("🔓 Engine UNLOCKED - Vehicle operational")
+            logger.info("🔓 ENGINE UNLOCKED - Relay ON")
+            self.send_sms("VEHICLE UNLOCKED")
             return True
         except Exception as e:
-            logger.error(f"Unlock engine error: {e}")
+            logger.error(f"Unlock error: {e}")
             return False
     
     def get_gps_location(self):
-        """Get current GPS coordinates"""
         try:
             packet = gpsd.get_current()
-            if packet.mode >= 2:  # 2D or 3D fix
-                location = {
+            if packet.mode >= 2:
+                return {
                     'latitude': packet.lat,
                     'longitude': packet.lon,
-                    'speed': packet.hspeed * 3.6,  # Convert to km/h
+                    'speed': packet.hspeed * 3.6,
                     'heading': packet.track,
-                    'altitude': packet.alt,
-                    'satellites': packet.sats,
                     'timestamp': datetime.now().isoformat()
                 }
-                self.current_location = location
-                return location
-        except Exception as e:
-            logger.debug(f"GPS error: {e}")
-        
+        except:
+            pass
         return self.current_location
     
     def capture_face(self):
-        """Capture face image for authentication"""
         if self.camera is None:
             return None
-        
         try:
             ret, frame = self.camera.read()
             if ret:
-                # Detect face using OpenCV
                 face_cascade = cv2.CascadeClassifier(
                     cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
                 )
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 faces = face_cascade.detectMultiScale(gray, 1.1, 5, minSize=(60, 60))
-                
                 if len(faces) > 0:
-                    # Get the largest face
                     (x, y, w, h) = max(faces, key=lambda f: f[2] * f[3])
                     face_roi = frame[y:y+h, x:x+w]
-                    
-                    # Encode to base64
                     _, buffer = cv2.imencode('.jpg', face_roi)
                     return base64.b64encode(buffer).decode('utf-8')
         except Exception as e:
             logger.error(f"Face capture error: {e}")
-        
         return None
     
     def send_sms(self, message):
-        """Send SMS alert via GSM"""
-        if not self.gsm_available:
+        if self.gsm_available:
+            try:
+                self.gsm.write(b'AT+CMGF=1\r\n')
+                time.sleep(0.5)
+                self.gsm.write(f'AT+CMGS="{OWNER_PHONE}"\r\n'.encode())
+                time.sleep(0.5)
+                self.gsm.write(f'{message}\x1A'.encode())
+                logger.info(f"SMS sent: {message}")
+            except:
+                logger.info(f"[SIMULATED SMS] {message}")
+        else:
             logger.info(f"[SIMULATED SMS] {message}")
-            return True
-        
-        try:
-            self.gsm.write(b'AT+CMGF=1\r\n')
-            time.sleep(0.5)
-            self.gsm.write(f'AT+CMGS="{OWNER_PHONE}"\r\n'.encode())
-            time.sleep(0.5)
-            self.gsm.write(f'{message}\x1A'.encode())
-            logger.info(f"SMS sent: {message[:50]}...")
-            return True
-        except Exception as e:
-            logger.error(f"SMS error: {e}")
-            return False
+        return True
     
     def cleanup(self):
-        """Cleanup hardware resources"""
         try:
-            self.lock_engine()  # Lock engine on shutdown
+            self.lock_engine()
             if self.camera:
                 self.camera.release()
             GPIO.cleanup()
-            logger.info("Hardware cleanup complete")
         except:
             pass
 
@@ -201,7 +184,8 @@ class CloudCommunicator:
         self.headers = {'X-API-KEY': api_key, 'Content-Type': 'application/json'}
     
     def send_location(self, location):
-        """Send GPS location to cloud"""
+        if not location:
+            return False
         try:
             response = requests.post(
                 f"{self.api_url}/hardware/location/",
@@ -209,31 +193,27 @@ class CloudCommunicator:
                 json=location,
                 timeout=5
             )
-            if response.status_code == 200:
-                logger.debug(f"Location sent: {location['latitude']:.4f}, {location['longitude']:.4f}")
-                return True
-        except Exception as e:
-            logger.error(f"Send location error: {e}")
-        return False
+            return response.status_code == 200
+        except:
+            return False
     
     def get_command(self):
-        """Get pending command from cloud"""
         try:
             response = requests.get(
                 f"{self.api_url}/hardware/get-command/",
-                headers=self.headers,
+                headers={'X-API-KEY': self.api_key},
                 timeout=5
             )
             if response.status_code == 200:
                 data = response.json()
                 if data.get('command') != 'NONE':
+                    logger.info(f"📡 Command received: {data.get('command')} (ID: {data.get('command_id')})")
                     return data
         except Exception as e:
-            logger.error(f"Get command error: {e}")
+            logger.debug(f"Command poll error: {e}")
         return None
     
-    def mark_command_executed(self, command_id):
-        """Mark command as executed"""
+    def mark_executed(self, command_id):
         try:
             response = requests.post(
                 f"{self.api_url}/hardware/mark-executed/",
@@ -242,44 +222,33 @@ class CloudCommunicator:
                 timeout=5
             )
             return response.status_code == 200
-        except Exception as e:
-            logger.error(f"Mark executed error: {e}")
-        return False
+        except:
+            return False
     
     def authenticate_face(self, face_image):
-        """Authenticate face via cloud"""
         try:
             response = requests.post(
                 f"{self.api_url}/api/face-auth/",
-                headers=self.headers,
+                headers={'Content-Type': 'application/json'},
                 json={'face_image': f"data:image/jpeg;base64,{face_image}"},
-                timeout=5
+                timeout=10
             )
             if response.status_code == 200:
                 return response.json().get('success', False)
-        except Exception as e:
-            logger.error(f"Face auth error: {e}")
+        except:
+            pass
         return False
     
-    def send_alert(self, title, description, severity='HIGH', location=None):
-        """Send alert to cloud"""
+    def send_alert(self, title, description, severity='HIGH'):
         try:
-            alert_data = {
-                'title': title,
-                'description': description,
-                'severity': severity,
-                'location': location or self.current_location
-            }
-            response = requests.post(
+            requests.post(
                 f"{self.api_url}/api/alerts/create/",
                 headers=self.headers,
-                json=alert_data,
+                json={'title': title, 'description': description, 'severity': severity},
                 timeout=5
             )
-            return response.status_code == 201
-        except Exception as e:
-            logger.error(f"Send alert error: {e}")
-        return False
+        except:
+            pass
 
 # ============= MAIN SYSTEM =============
 class VehicleSecuritySystem:
@@ -287,47 +256,8 @@ class VehicleSecuritySystem:
         self.hardware = VehicleHardware()
         self.cloud = CloudCommunicator(API_BASE_URL, API_KEY)
         self.running = True
-        self.command_queue = queue.Queue()
         
-    def run(self):
-        """Main system loop"""
-        logger.info("=" * 50)
-        logger.info("🚗 VEHICLE SECURITY SYSTEM STARTED")
-        logger.info(f"Cloud Server: {API_BASE_URL}")
-        logger.info(f"Relay Pin: GPIO{RELAY_PIN}")
-        logger.info("=" * 50)
-        
-        # Start background threads
-        self.start_threads()
-        
-        try:
-            while self.running:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            logger.info("Shutting down...")
-            self.running = False
-            self.hardware.cleanup()
-    
-    def start_threads(self):
-        """Start all background threads"""
-        threads = [
-            threading.Thread(target=self.gps_loop, daemon=True),
-            threading.Thread(target=self.command_loop, daemon=True),
-            threading.Thread(target=self.intruder_detection_loop, daemon=True),
-        ]
-        for thread in threads:
-            thread.start()
-    
-    def gps_loop(self):
-        """Continuous GPS tracking loop"""
-        while self.running:
-            location = self.hardware.get_gps_location()
-            if location:
-                self.cloud.send_location(location)
-            time.sleep(GPS_UPDATE_INTERVAL)
-    
     def command_loop(self):
-        """Poll for remote commands"""
         while self.running:
             command_data = self.cloud.get_command()
             if command_data:
@@ -335,91 +265,86 @@ class VehicleSecuritySystem:
                 command_id = command_data.get('command_id')
                 
                 if command == 'UNLOCK':
-                    success = self.hardware.unlock_engine()
-                    if success:
-                        self.cloud.mark_command_executed(command_id)
-                        self.send_alert_sms("VEHICLE UNLOCKED", "Your vehicle has been unlocked remotely")
+                    logger.info("🔓 Executing UNLOCK...")
+                    if self.hardware.unlock_engine():
+                        self.cloud.mark_executed(command_id)
+                        logger.info(f"✅ Command {command_id} marked as executed")
                 elif command == 'LOCK':
-                    success = self.hardware.lock_engine()
-                    if success:
-                        self.cloud.mark_command_executed(command_id)
-                        self.send_alert_sms("VEHICLE LOCKED", "Your vehicle has been locked remotely")
+                    logger.info("🔒 Executing LOCK...")
+                    if self.hardware.lock_engine():
+                        self.cloud.mark_executed(command_id)
+                        logger.info(f"✅ Command {command_id} marked as executed")
             
             time.sleep(COMMAND_POLL_INTERVAL)
     
-    def intruder_detection_loop(self):
-        """Check for unauthorized access attempts"""
-        last_alert_time = 0
-        consecutive_failures = 0
-        
+    def gps_loop(self):
         while self.running:
-            if self.hardware.engine_locked:  # Only check when locked
-                face_image = self.hardware.capture_face()
-                
-                if face_image:
-                    is_authorized = self.cloud.authenticate_face(face_image)
-                    
-                    if is_authorized:
-                        logger.info("✅ Authorized user detected - Unlocking engine")
+            location = self.hardware.get_gps_location()
+            if location:
+                self.cloud.send_location(location)
+            time.sleep(GPS_UPDATE_INTERVAL)
+    
+    def intruder_loop(self):
+        consecutive = 0
+        while self.running:
+            if self.hardware.engine_locked:
+                face = self.hardware.capture_face()
+                if face:
+                    if self.cloud.authenticate_face(face):
+                        logger.info("✅ Authorized face detected - UNLOCKING")
                         self.hardware.unlock_engine()
-                        consecutive_failures = 0
+                        consecutive = 0
                     else:
-                        consecutive_failures += 1
-                        logger.warning(f"⚠️ Unauthorized access attempt #{consecutive_failures}")
-                        
-                        # Send alert on every 3rd failure
-                        if consecutive_failures >= 3:
-                            current_time = time.time()
-                            if current_time - last_alert_time > 60:  #  1 alert per minute
-                                self.handle_intruder_alert()
-                                last_alert_time = current_time
-                                consecutive_failures = 0
-            
+                        consecutive += 1
+                        logger.warning(f"⚠️ Unauthorized attempt #{consecutive}")
+                        if consecutive >= 3:
+                            self.cloud.send_alert(
+                                "UNAUTHORIZED ACCESS",
+                                "Unknown person attempted to access vehicle",
+                                "HIGH"
+                            )
+                            self.hardware.send_sms("🚨 ALERT! Unauthorized access attempt!")
+                            consecutive = 0
             time.sleep(INTRUDER_CHECK_INTERVAL)
     
-    def handle_intruder_alert(self):
-        """Handle unauthorized access attempt"""
-        location = self.hardware.current_location
+    def run(self):
+        logger.info("=" * 60)
+        logger.info("🚗 VEHICLE SECURITY SYSTEM STARTED")
+        logger.info(f"Cloud Server: {API_BASE_URL}")
+        logger.info(f"Relay Pin: GPIO{RELAY_PIN}")
+        logger.info("=" * 60)
         
-        # Create alert in cloud
-        self.cloud.send_alert(
-            title="UNAUTHORIZED ACCESS ATTEMPT",
-            description=f"An unauthorized person attempted to access your vehicle at {location}",
-            severity="HIGH",
-            location=location
-        )
+        # Start threads
+        threads = [
+            threading.Thread(target=self.gps_loop, daemon=True),
+            threading.Thread(target=self.command_loop, daemon=True),
+            threading.Thread(target=self.intruder_loop, daemon=True),
+        ]
+        for t in threads:
+            t.start()
         
-        # Send SMS alert
-        sms_message = f"ALERT! Unauthorized access attempt on your vehicle at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-        self.hardware.send_sms(sms_message)
+        logger.info("✅ All systems operational")
+        logger.info("📡 Waiting for commands from cloud...")
+        logger.info("Press Ctrl+C to stop")
         
-        # Also send via HTTP API fallback
-        self.send_http_alert(sms_message)
-    
-    def send_alert_sms(self, title, message):
-        """Send SMS alert for system events"""
-        sms_message = f"{title}: {message} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-        self.hardware.send_sms(sms_message)
-    
-    def send_http_alert(self, message):
-        """Fallback HTTP alert using SMS gateway API"""
         try:
-            # You can integrate with Twilio, MessageBird, or other SMS APIs
-            # Example with a generic SMS gateway:
-            response = requests.post(
-                "https://api.smsgateway.com/send",
-                json={
-                    "to": OWNER_PHONE,
-                    "message": message,
-                    "api_key": "your-sms-gateway-api-key"
-                },
-                timeout=5
-            )
-            logger.info(f"HTTP SMS sent: {response.status_code}")
-        except:
-            pass
-
+            while self.running:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            self.cleanup()
+    
+    def cleanup(self):
+        self.running = False
+        self.hardware.cleanup()
+        logger.info("Shutdown complete")
 
 if __name__ == "__main__":
+    # Test cloud connection
+    try:
+        test = requests.get(f"{API_BASE_URL}/api/face-auth/", timeout=3)
+        logger.info(f"✅ Cloud server reachable at {API_BASE_URL}")
+    except Exception as e:
+        logger.warning(f"⚠️ Cannot reach cloud server at {API_BASE_URL}: {e}")
+    
     system = VehicleSecuritySystem()
     system.run()
