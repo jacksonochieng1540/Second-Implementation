@@ -3,8 +3,8 @@ from django.db import models
 class VehicleLocation(models.Model):
     latitude = models.DecimalField(max_digits=10, decimal_places=7)
     longitude = models.DecimalField(max_digits=10, decimal_places=7)
-    speed = models.FloatField(default=0.0)  # km/h
-    heading = models.IntegerField(default=0)  # degrees
+    speed = models.FloatField(default=0.0)  
+    heading = models.IntegerField(default=0)  
     timestamp = models.DateTimeField(auto_now_add=True)
     
     class Meta:
