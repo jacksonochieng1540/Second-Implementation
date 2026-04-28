@@ -64,11 +64,10 @@ def send_command(request):
     
     serializer = VehicleCommandSerializer(vehicle_command)
     return Response(serializer.data, status=status.HTTP_201_CREATED)
-
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def face_auth(request):
-    """Face authentication - Distinguishes registered vs unregistered faces"""
+    """Face authentication"""
     from authentication.face_recognizer import face_recognizer
     from .models import VehicleCommand
     from alerts.models import Alert
@@ -82,62 +81,40 @@ def face_auth(request):
     print("🔐 FACE AUTHENTICATION")
     print("="*50)
     
-    # Recognize the face
-    result, username, confidence = face_recognizer.recognize_face(face_image)
+    result, username, confidence = face_recognizer.authenticate_face(face_image)
     
-    # CASE 1: RECOGNIZED - Registered user (Trained face)
     if result == 'RECOGNIZED':
         user = User.objects.get(username=username)
         command = VehicleCommand.objects.create(command='UNLOCK', user=user)
-        
-        print(f"\n✅ RESULT: REGISTERED USER - {username}")
-        print(f"🔓 UNLOCK command #{command.id} created")
+        print(f"✅ RECOGNIZED: {username} - UNLOCK #{command.id}")
         
         return Response({
             'success': True,
             'message': f'Welcome {username}! Engine unlocking...',
-            'user': username,
-            'result': 'RECOGNIZED'
+            'user': username
         }, status=200)
     
-    # CASE 2: NO FACE DETECTED
     elif result == 'NO_FACE':
-        print(f"\n📷 RESULT: NO FACE DETECTED")
+        print("📷 NO_FACE - No face detected")
         return Response({
             'success': False,
-            'message': 'No face detected',
-            'result': 'NO_FACE'
+            'message': 'No face detected'
         }, status=200)
     
-    # CASE 3: UNREGISTERED FACE - Not trained
-    elif result == 'UNREGISTERED':
-        print(f"\n🚫 RESULT: UNREGISTERED FACE DETECTED")
-        
-        # Create alert for unauthorized access
-        alert = Alert.objects.create(
+    else:  # NOT_RECOGNIZED
+        print("🚫 NOT_RECOGNIZED - Unauthorized access")
+        Alert.objects.create(
             title='UNAUTHORIZED ACCESS ATTEMPT',
-            description='An unregistered face attempted to access the vehicle',
+            description='An unrecognized face attempted to access the vehicle',
             severity='HIGH'
         )
-        
-        # Send SMS alert
-        try:
-            from alerts.sms_handler import gsm_handler
-            owner_phone = '+254792333250'
-            gsm_handler.send_sms(owner_phone, f"🚨 ALERT! Unregistered person attempting to access your vehicle!")
-        except Exception as e:
-            print(f"SMS error: {e}")
-        
-        return Response({
+        return Response({ 
             'success': False,
-            'message': 'Unregistered face detected - Access denied. Alert triggered.',
-            'result': 'UNREGISTERED'
+            'message': 'Face not recognized - Access denied'
         }, status=401)
     
-    return Response({'success': False, 'message': 'Unknown error'}, status=500)
-    
 @api_view(['POST'])
-@permission_classes([AllowAny])
+@permission_classes([AllowAny]) 
 def create_alert(request):
     """Create alert from hardware"""
     try:
