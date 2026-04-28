@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def register_face(request):
-    """TRAIN the system with a new face"""
+    """Register a new face"""
     try:
         username = request.data.get('username')
         password = request.data.get('password')
@@ -23,13 +23,15 @@ def register_face(request):
         if not all([username, password, face_image]):
             return Response({'error': 'All fields required'}, status=400)
         
-        # Train the system with this face
-        success, message = face_recognizer.train_new_face(username, face_image)
+        print(f"\n📝 Registering face for: {username}")
+        
+        # Register the face
+        success, message = face_recognizer.register_face(username, face_image)
         
         if not success:
             return Response({'error': message}, status=400)
         
-        # Create user account
+        # Create or get user
         user, created = User.objects.get_or_create(
             username=username,
             defaults={'email': f'{username}@example.com'}
@@ -38,6 +40,16 @@ def register_face(request):
         if created:
             user.set_password(password)
             user.save()
+            print(f"✅ Created user: {username}")
+        else:
+            user.set_password(password)
+            user.save()
+            print(f"✅ Updated password for: {username}")
+        
+        # Update profile
+        profile, _ = UserProfile.objects.get_or_create(user=user)
+        profile.has_face_registered = True
+        profile.save()
         
         return Response({
             'success': True,
@@ -46,20 +58,22 @@ def register_face(request):
         }, status=200)
         
     except Exception as e:
+        print(f"❌ Error: {e}")
         return Response({'error': str(e)}, status=500)
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def face_login(request):
-    """RECOGNIZE face - compares with trained faces"""
+    """Authenticate face"""
     try:
         face_image = request.data.get('face_image')
         
         if not face_image:
             return Response({'error': 'Face image required'}, status=400)
         
-        # Recognize the face
-        result, username, confidence = face_recognizer.recognize_face(face_image)
+        print(f"\n🔍 Authenticating face...")
+        
+        result, username, confidence = face_recognizer.authenticate_face(face_image)
         
         if result == 'RECOGNIZED':
             user = User.objects.get(username=username)
@@ -67,7 +81,7 @@ def face_login(request):
             
             return Response({
                 'success': True,
-                'message': f'Welcome {username}! Face recognized.',
+                'message': f'Welcome {username}!',
                 'user': username,
                 'confidence': confidence
             }, status=200)
@@ -75,16 +89,17 @@ def face_login(request):
         elif result == 'NO_FACE':
             return Response({
                 'success': False,
-                'message': 'No face detected. Please look at the camera.',
+                'message': 'No face detected',
                 'result': 'NO_FACE'
             }, status=200)
         
-        else:  # UNREGISTERED
+        else:  # NOT_RECOGNIZED
             return Response({
                 'success': False,
-                'message': 'Face not recognized. Unregistered user detected.',
-                'result': 'UNREGISTERED'
+                'message': 'Face not recognized - Unauthorized',
+                'result': 'NOT_RECOGNIZED'
             }, status=401)
         
     except Exception as e:
+        print(f"❌ Error: {e}")
         return Response({'error': str(e)}, status=500)

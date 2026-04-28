@@ -1,50 +1,40 @@
 """
-COMPLETE WORKING FACE RECOGNITION
-Registration and Authentication working
+Face Recognition Module - STRICT matching (no false positives)
 """
 
 import face_recognition
 import cv2
 import numpy as np
 import base64
-import json
+import pickle
 from pathlib import Path
 
 class FaceRecognizer:
     def __init__(self):
-        self.encodings_file = Path('face_encodings.json')
+        self.encodings_file = Path('encodings.pickle')
         self.known_face_encodings = []
         self.known_face_names = []
-        self.load_data()
+        self.load_encodings()
         print("="*50)
-        print("🔐 FACE RECOGNITION READY")
-        print(f"   Registered: {len(self.known_face_names)} user(s)")
+        print("🔐 STRICT FACE RECOGNITION SYSTEM")
+        print(f"   Authorized users: {len(self.known_face_names)}")
+        if self.known_face_names:
+            print(f"   ONLY these faces can unlock: {', '.join(self.known_face_names)}")
         print("="*50)
     
-    def load_data(self):
-        """Load registered faces"""
+    def load_encodings(self):
         if self.encodings_file.exists():
             try:
-                with open(self.encodings_file, 'r') as f:
-                    data = json.load(f)
-                    self.known_face_encodings = [np.array(enc) for enc in data['encodings']]
-                    self.known_face_names = data['names']
-            except:
-                pass
+                with open(self.encodings_file, "rb") as f:
+                    data = pickle.loads(f.read())
+                    self.known_face_encodings = data["encodings"]
+                    self.known_face_names = data["names"]
+                print(f"✅ Loaded {len(self.known_face_names)} authorized face(s)")
+            except Exception as e:
+                print(f"⚠️ Error: {e}")
     
-    def save_data(self):
-        """Save registered faces"""
-        data = {
-            'encodings': [enc.tolist() for enc in self.known_face_encodings],
-            'names': self.known_face_names
-        }
-        with open(self.encodings_file, 'w') as f:
-            json.dump(data, f, indent=2)
-    
-    def get_encoding(self, image_base64):
-        """Extract face encoding from image"""
+    def get_face_encoding(self, image_base64):
         try:
-            # Decode image
             if ',' in image_base64:
                 image_data = base64.b64decode(image_base64.split(',')[1])
             else:
@@ -52,87 +42,86 @@ class FaceRecognizer:
             
             nparr = np.frombuffer(image_data, np.uint8)
             img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            
             if img is None:
                 return None
             
             rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            locations = face_recognition.face_locations(rgb)
-            
-            if len(locations) == 0:
+            face_locations = face_recognition.face_locations(rgb)
+            if len(face_locations) == 0:
                 return None
             
-            encodings = face_recognition.face_encodings(rgb, locations)
-            
-            if len(encodings) == 0:
+            face_encodings = face_recognition.face_encodings(rgb, face_locations)
+            if len(face_encodings) == 0:
                 return None
             
-            return encodings[0]
+            return face_encodings[0]
         except Exception as e:
             print(f"Error: {e}")
             return None
     
-    # This is the method called by register_face in views.py
     def register_face(self, username, image_base64):
-        """Register a new face"""
         print(f"\n📝 Registering: {username}")
+        face_encoding = self.get_face_encoding(image_base64)
+        if face_encoding is None:
+            return False, "No face detected"
         
-        encoding = self.get_encoding(image_base64)
+        # Remove old entries
+        indices = [i for i, name in enumerate(self.known_face_names) if name == username]
+        for idx in reversed(indices):
+            del self.known_face_encodings[idx]
+            del self.known_face_names[idx]
         
-        if encoding is None:
-            return False, "No face detected. Please look at the camera."
-        
-        # Remove old entry if exists
-        for i, name in enumerate(self.known_face_names):
-            if name == username:
-                del self.known_face_encodings[i]
-                del self.known_face_names[i]
-        
-        # Add new face
-        self.known_face_encodings.append(encoding)
+        self.known_face_encodings.append(face_encoding)
         self.known_face_names.append(username)
-        self.save_data()
+        
+        data = {"encodings": self.known_face_encodings, "names": self.known_face_names}
+        with open(self.encodings_file, "wb") as f:
+            f.write(pickle.dumps(data))
         
         print(f"✅ Registered: {username}")
-        return True, f"Face registered for {username}"
+        return True, f"Registered {username}"
     
-    # This is the method called by face_auth in api/views.py
-    def authenticate_face(self, image_base64, tolerance=0.6):
-        """Authenticate a face"""
-        print(f"\n🔍 Authenticating...")
+    def authenticate_face(self, image_base64, tolerance=0.5):
+        """
+        STRICT authentication - ONLY returns match if distance is very low
+        """
+        print(f"\n🔍 STRICT AUTHENTICATION")
+        print("-" * 40)
         
-        encoding = self.get_encoding(image_base64)
-        
-        # NO FACE
-        if encoding is None:
+        face_encoding = self.get_face_encoding(image_base64)
+        if face_encoding is None:
             print("📷 NO_FACE")
             return 'NO_FACE', None, None
         
-        # NO REGISTERED FACES
         if len(self.known_face_encodings) == 0:
-            print("📷 NOT_RECOGNIZED - No registered faces")
+            print("📷 NOT_RECOGNIZED - No authorized users")
             return 'NOT_RECOGNIZED', None, None
         
-        # COMPARE
-        matches = face_recognition.compare_faces(self.known_face_encodings, encoding, tolerance)
-        distances = face_recognition.face_distance(self.known_face_encodings, encoding)
+        # Calculate distances to all known faces
+        distances = []
+        for known_encoding in self.known_face_encodings:
+            distance = np.linalg.norm(known_encoding - face_encoding)
+            distances.append(distance)
         
-        print("   Results:")
-        for i, (name, match, dist) in enumerate(zip(self.known_face_names, matches, distances)):
-            conf = (1 - dist) * 100
-            status = "✅" if match else "❌"
-            print(f"   {status} {name}: {conf:.1f}%")
+        # Find best match
+        best_idx = np.argmin(distances)
+        best_distance = distances[best_idx]
+        best_name = self.known_face_names[best_idx]
+        confidence = (1 - min(best_distance, 1.0)) * 100
         
-        # CHECK MATCH
-        if True in matches:
-            idx = matches.index(True)
-            username = self.known_face_names[idx]
-            confidence = (1 - distances[idx]) * 100
-            print(f"\n✅ RECOGNIZED: {username}")
-            return 'RECOGNIZED', username, confidence
+        print(f"\n   Best match: {best_name}")
+        print(f"   Distance: {best_distance:.4f}")
+        print(f"   Confidence: {confidence:.1f}%")
+        print(f"   Required: distance < {tolerance} to authorize")
         
-        print(f"\n❌ NOT_RECOGNIZED - Unauthorized face")
-        return 'NOT_RECOGNIZED', None, None
+        # STRICT CHECK - ONLY authorize if distance is very small
+        if best_distance < tolerance:
+            print(f"\n✅✅✅ AUTHORIZED: {best_name} (distance={best_distance:.4f})")
+            return 'RECOGNIZED', best_name, confidence
+        else:
+            print(f"\n❌ DENIED: Face does not match any authorized user")
+            print(f"   (Closest match was {best_name} but distance {best_distance:.4f} > {tolerance})")
+            return 'NOT_RECOGNIZED', None, None
 
-# Create the instance
+# Create instance
 face_recognizer = FaceRecognizer()
