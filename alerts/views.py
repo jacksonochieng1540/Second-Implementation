@@ -19,3 +19,4 @@ def alert_list(request):
             'is_resolved': alert.is_resolved
         })
     return Response(alerts_data)
+
