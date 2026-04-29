@@ -1,81 +1,112 @@
+"""
+GSM SMS Handler for Real SMS Alerts
+"""
+
 import serial
 import time
-import requests
 import logging
-from django.conf import settings
+import threading
 
 logger = logging.getLogger(__name__)
 
 class GSMHandler:
     def __init__(self, port='/dev/ttyUSB0', baudrate=9600):
-        """Initialize GSM module"""
         self.port = port
         self.baudrate = baudrate
         self.serial_connection = None
-        self.use_simulated = True  # Set to False for real GSM
-        
+        self.is_connected = False
+        self.use_simulated = True  # Default to simulated
+        self.connect()
+    
     def connect(self):
         """Connect to GSM module"""
         try:
-            if not self.use_simulated:
-                self.serial_connection = serial.Serial(self.port, self.baudrate, timeout=1)
-                time.sleep(2)
-                self.serial_connection.write(b'AT\r\n')
-                response = self.serial_connection.read(100)
-                if b'OK' in response:
-                    logger.info("GSM module connected")
-                    return True
+            # Try multiple ports
+            ports_to_try = ['/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyACM0', '/dev/ttyS0']
+            
+            for port in ports_to_try:
+                try:
+                    self.serial_connection = serial.Serial(port, self.baudrate, timeout=2)
+                    time.sleep(1)
+                    
+                    # Test AT command
+                    self.serial_connection.write(b'AT\r\n')
+                    time.sleep(0.5)
+                    response = self.serial_connection.read(100)
+                    
+                    if b'OK' in response:
+                        self.is_connected = True
+                        self.use_simulated = False
+                        self.port = port
+                        logger.info(f"✅ GSM module connected on {port}")
+                        return True
+                    else:
+                        self.serial_connection.close()
+                        self.serial_connection = None
+                        
+                except Exception as e:
+                    if self.serial_connection:
+                        self.serial_connection.close()
+                    self.serial_connection = None
+                    continue
+            
+            # If we get here, no GSM module found
+            logger.warning("⚠️ No GSM module found - Using simulated SMS mode")
+            self.use_simulated = True
+            return False
+            
         except Exception as e:
-            logger.error(f"GSM connection error: {e}")
-        
-        # Use simulated mode for development
-        logger.info("Using simulated SMS mode")
-        return True
-    
-    def send_sms(self, phone_number, message):
-        """Send SMS alert"""
-        try:
-            if self.use_simulated:
-                # Simulate SMS sending
-                logger.info(f"[SIMULATED SMS] To: {phone_number}")
-                logger.info(f"[SIMULATED SMS] Message: {message}")
-                
-                # Also send via HTTP API (Twilio/MessageBird alternative)
-                self.send_via_http_api(phone_number, message)
-                return True
-            else:
-                # Real GSM SMS
-                self.serial_connection.write(b'AT+CMGF=1\r\n')
-                time.sleep(0.5)
-                self.serial_connection.write(f'AT+CMGS="{phone_number}"\r\n'.encode())
-                time.sleep(0.5)
-                self.serial_connection.write(f'{message}\x1A'.encode())
-                time.sleep(1)
-                return True
-        except Exception as e:
-            logger.error(f"SMS sending error: {e}")
+            logger.warning(f"GSM connection error: {e}")
+            self.use_simulated = True
             return False
     
-    def send_via_http_api(self, phone_number, message):
-        """Fallback to HTTP API (Twilio, etc.)"""
-        # You can integrate with Twilio, MessageBird, or other SMS gateways
-        api_key = getattr(settings, 'SMS_API_KEY', None)
-        if api_key:
-            # Example with a generic SMS API
-            try:
-                response = requests.post(
-                    'https://api.sms-gateway.com/send',
-                    json={
-                        'to': phone_number,
-                        'message': message,
-                        'api_key': api_key
-                    },
-                    timeout=5
-                )
-                return response.status_code == 200
-            except:
-                pass
-        return False
+    def send_sms(self, phone_number, message):
+        """Send SMS using GSM module or simulation"""
+        if self.use_simulated:
+            logger.info(f"[SIMULATED SMS] To: {phone_number}")
+            logger.info(f"[SIMULATED SMS] Message: {message}")
+            return True
+        
+        try:
+            # Set SMS text mode
+            self.serial_connection.write(b'AT+CMGF=1\r\n')
+            time.sleep(0.5)
+            
+            # Set recipient
+            self.serial_connection.write(f'AT+CMGS="{phone_number}"\r\n'.encode())
+            time.sleep(0.5)
+            
+            # Send message
+            self.serial_connection.write(f'{message}\x1A'.encode())
+            time.sleep(2)
+            
+            # Check response
+            response = self.serial_connection.read(200)
+            if b'+CMGS' in response or b'OK' in response:
+                logger.info(f"✅ SMS sent to {phone_number}")
+                return True
+            else:
+                logger.error(f"❌ SMS failed: {response}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"SMS error: {e}")
+            return False
+    
+    def check_balance(self):
+        """Check SMS balance (optional)"""
+        if self.use_simulated:
+            logger.info("[SIMULATED] Balance: $10 (simulated)")
+            return "Simulated balance"
+        
+        try:
+            self.serial_connection.write(b'AT+CBC\r\n')
+            time.sleep(0.5)
+            response = self.serial_connection.read(100)
+            logger.info(f"Battery status: {response}")
+            return response
+        except:
+            return "Unknown"
 
 # Global instance
 gsm_handler = GSMHandler()

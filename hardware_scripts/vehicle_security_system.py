@@ -2,6 +2,7 @@
 """
 Complete Vehicle Security System for Raspberry Pi
 Works with web dashboard - Controls relay via GPIO27
+Includes intruder image capture and alert
 """
 
 import requests
@@ -16,15 +17,16 @@ import serial
 from datetime import datetime
 import threading
 import logging
+import math
 
 # ============= CONFIGURATION - CHANGE THESE =============
 API_BASE_URL = "http://10.251.159.57:8000"  # YOUR LAPTOP IP ADDRESS
 API_KEY = "mysecurekey123"  # Must match Django settings
-RELAY_PIN = 27  # GPIO27 (Physical pin 13) - the pin that worked in your test
+RELAY_PIN = 27  # GPIO27 (Physical pin 13)
 CAMERA_DEVICE = 0
 GPS_UPDATE_INTERVAL = 3
 COMMAND_POLL_INTERVAL = 2
-INTRUDER_CHECK_INTERVAL = 10
+INTRUDER_CHECK_INTERVAL = 5  # Check every 5 seconds
 GSM_PORT = '/dev/ttyUSB0'
 OWNER_PHONE = "+254792333250"  # YOUR PHONE NUMBER
 
@@ -42,6 +44,7 @@ class VehicleHardware:
         self.current_location = None
         self.gsm_available = False
         self.camera = None
+        self.sim_angle = 0  # For simulated GPS
         
         self.setup_gpio()
         self.setup_gps()
@@ -118,6 +121,7 @@ class VehicleHardware:
             return False
     
     def get_gps_location(self):
+        # Try real GPS first
         try:
             packet = gpsd.get_current()
             if packet.mode >= 2:
@@ -130,24 +134,46 @@ class VehicleHardware:
                 }
         except:
             pass
-        return self.current_location
+        
+        # Simulated GPS (circular movement)
+        self.sim_angle += 0.03
+        center_lat = -1.2864  # Nairobi
+        center_lng = 36.8172
+        radius = 0.008
+        
+        return {
+            'latitude': center_lat + radius * math.sin(self.sim_angle),
+            'longitude': center_lng + radius * math.cos(self.sim_angle),
+            'speed': 40 + 20 * math.sin(self.sim_angle),
+            'heading': (self.sim_angle * 57.3) % 360,
+            'timestamp': datetime.now().isoformat()
+        }
     
     def capture_face(self):
         if self.camera is None:
+            logger.warning("Camera not available")
             return None
         try:
             ret, frame = self.camera.read()
             if ret:
+                logger.info(f"📷 Frame captured: {frame.shape}")
                 face_cascade = cv2.CascadeClassifier(
                     cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
                 )
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 faces = face_cascade.detectMultiScale(gray, 1.1, 5, minSize=(60, 60))
+                logger.info(f"👤 Faces detected: {len(faces)}")
                 if len(faces) > 0:
                     (x, y, w, h) = max(faces, key=lambda f: f[2] * f[3])
                     face_roi = frame[y:y+h, x:x+w]
                     _, buffer = cv2.imencode('.jpg', face_roi)
-                    return base64.b64encode(buffer).decode('utf-8')
+                    b64_data = base64.b64encode(buffer).decode('utf-8')
+                    logger.info(f"📸 Face captured, base64 length: {len(b64_data)}")
+                    return b64_data
+                else:
+                    logger.info("No faces detected in frame")
+            else:
+                logger.warning("Failed to read frame")
         except Exception as e:
             logger.error(f"Face capture error: {e}")
         return None
@@ -234,21 +260,62 @@ class CloudCommunicator:
                 timeout=10
             )
             if response.status_code == 200:
-                return response.json().get('success', False)
+                result = response.json()
+                return result.get('success', False), result
         except:
             pass
-        return False
+        return False, None
     
-    def send_alert(self, title, description, severity='HIGH'):
+    def send_intruder_alert(self, face_image):
+        """Send intruder alert with captured face image"""
         try:
-            requests.post(
+            if not face_image:
+                logger.error("❌ No face image to send")
+                return False
+            
+            logger.info(f"📸 Preparing to send intruder alert")
+            logger.info(f"   Image length: {len(face_image)} characters")
+            logger.info(f"   Image starts with: {face_image[:50]}...")
+            
+            # Ensure the image has data URL prefix
+            if not face_image.startswith('data:image'):
+                face_image_with_prefix = f"data:image/jpeg;base64,{face_image}"
+                logger.info(f"   Added data URL prefix")
+            else:
+                face_image_with_prefix = face_image
+            
+            alert_data = {
+                'title': 'UNAUTHORIZED ACCESS ATTEMPT',
+                'description': f'Unknown person attempted to access vehicle at {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}',
+                'severity': 'HIGH',
+                'face_image': face_image_with_prefix
+            }
+            
+            logger.info(f"📤 Sending POST to {self.api_url}/api/alerts/create/")
+            logger.info(f"   Alert data size: {len(str(alert_data))} bytes")
+            
+            response = requests.post(
                 f"{self.api_url}/api/alerts/create/",
                 headers=self.headers,
-                json={'title': title, 'description': description, 'severity': severity},
-                timeout=5
+                json=alert_data,
+                timeout=15
             )
-        except:
-            pass
+            
+            logger.info(f"📥 Response status: {response.status_code}")
+            logger.info(f"   Response body: {response.text[:200]}")
+            
+            if response.status_code == 201:
+                result = response.json()
+                logger.info(f"✅ Alert {result.get('id')} created, image saved: {result.get('image_saved')}")
+                return True
+            else:
+                logger.error(f"❌ Alert failed: {response.status_code} - {response.text}")
+                return False
+        except Exception as e:
+            logger.error(f"❌ Send intruder alert error: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
 
 # ============= MAIN SYSTEM =============
 class VehicleSecuritySystem:
@@ -285,26 +352,32 @@ class VehicleSecuritySystem:
             time.sleep(GPS_UPDATE_INTERVAL)
     
     def intruder_loop(self):
-        consecutive = 0
+        """Check for unauthorized access and capture intruder images"""
+        last_alert_time = 0
+        
         while self.running:
             if self.hardware.engine_locked:
-                face = self.hardware.capture_face()
-                if face:
-                    if self.cloud.authenticate_face(face):
+                face_image = self.hardware.capture_face()
+                
+                if face_image:
+                    logger.info(f"📸 Face captured, length: {len(face_image)} bytes")
+                    
+                    # Authenticate face with cloud
+                    is_authorized, result = self.cloud.authenticate_face(face_image)
+                    
+                    if is_authorized:
                         logger.info("✅ Authorized face detected - UNLOCKING")
                         self.hardware.unlock_engine()
-                        consecutive = 0
                     else:
-                        consecutive += 1
-                        logger.warning(f"⚠️ Unauthorized attempt #{consecutive}")
-                        if consecutive >= 3:
-                            self.cloud.send_alert(
-                                "UNAUTHORIZED ACCESS",
-                                "Unknown person attempted to access vehicle",
-                                "HIGH"
-                            )
-                            self.hardware.send_sms("🚨 ALERT! Unauthorized access attempt!")
-                            consecutive = 0
+                        logger.warning("⚠️ Unauthorized face detected - Sending alert with image")
+                        
+                        # Send alert with image (rate limited to once per 30 seconds)
+                        current_time = time.time()
+                        if current_time - last_alert_time > 30:
+                            logger.info("📸 Sending intruder alert with captured image...")
+                            self.cloud.send_intruder_alert(face_image)
+                            self.hardware.send_sms("🚨 ALERT! Unauthorized access attempt on your vehicle!")
+                            last_alert_time = current_time
             time.sleep(INTRUDER_CHECK_INTERVAL)
     
     def run(self):
@@ -325,6 +398,7 @@ class VehicleSecuritySystem:
         
         logger.info("✅ All systems operational")
         logger.info("📡 Waiting for commands from cloud...")
+        logger.info("👤 Intruder detection active - unauthorized faces will be captured")
         logger.info("Press Ctrl+C to stop")
         
         try:

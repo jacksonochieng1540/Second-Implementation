@@ -279,12 +279,12 @@
             padding: 20px;
             border-radius: 16px;
             box-shadow: 0 5px 20px rgba(0,0,0,0.1);
-            max-height: 300px;
+            max-height: 400px;
             overflow-y: auto;
         }
 
         .alert-item {
-            padding: 12px;
+            padding: 15px;
             margin-bottom: 10px;
             border-radius: 10px;
             background: #f8f9fa;
@@ -292,19 +292,85 @@
             transition: all 0.3s;
         }
 
+        .alert-item:hover {
+            transform: translateX(5px);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
         .alert-item.high {
             border-left-color: #dc3545;
-            background: #fef5f5;
+            background: #fff5f5;
+        }
+
+        .alert-item.critical {
+            border-left-color: #dc3545;
+            background: #ffe6e6;
         }
 
         .alert-title {
-            font-weight: 600;
+            font-weight: 700;
+            margin-bottom: 5px;
+            font-size: 14px;
+        }
+
+        .alert-description {
+            font-size: 12px;
+            color: #666;
             margin-bottom: 5px;
         }
 
         .alert-time {
-            font-size: 11px;
+            font-size: 10px;
             color: #999;
+            margin-top: 5px;
+        }
+
+        .alert-image {
+            margin-top: 10px;
+            border-radius: 8px;
+            max-width: 100%;
+            max-height: 150px;
+            cursor: pointer;
+            border: 1px solid #ddd;
+        }
+
+        .alert-image:hover {
+            transform: scale(1.02);
+            transition: transform 0.2s;
+        }
+
+        /* Modal for full-size image */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 10000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.9);
+        }
+
+        .modal-content {
+            margin: auto;
+            display: block;
+            max-width: 90%;
+            max-height: 90%;
+            margin-top: 5%;
+        }
+
+        .close-modal {
+            position: absolute;
+            top: 15px;
+            right: 35px;
+            color: #f1f1f1;
+            font-size: 40px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        .close-modal:hover {
+            color: #bbb;
         }
 
         .connection-status {
@@ -385,10 +451,36 @@
             from { transform: translateX(0); opacity: 1; }
             to { transform: translateX(100%); opacity: 0; }
         }
+
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 10px;
+            font-weight: 600;
+            margin-left: 8px;
+        }
+
+        .badge-high {
+            background: #dc3545;
+            color: white;
+        }
+
+        .badge-critical {
+            background: #dc3545;
+            color: white;
+            animation: pulse 1s infinite;
+        }
     </style>
 </head>
 <body>
     <div class="animated-bg"></div>
+    
+    <!-- Image Modal -->
+    <div id="imageModal" class="modal">
+        <span class="close-modal">&times;</span>
+        <img class="modal-content" id="modalImage">
+    </div>
     
     <div class="dashboard-container">
         <div class="sidebar">
@@ -467,8 +559,9 @@
                 <div id="registerMessage" style="margin-top: 12px; font-size: 13px; text-align: center;"></div>
             </div>
 
+            <!-- Alerts Section - Enhanced with images -->
             <div class="alerts-card">
-                <h3><i class="fas fa-bell"></i> Recent Alerts</h3>
+                <h3><i class="fas fa-bell"></i> Security Alerts</h3>
                 <div id="alertsList">
                     <div style="text-align: center; color: #999; padding: 20px;">
                         <i class="fas fa-spinner fa-spin"></i> Loading alerts...
@@ -503,6 +596,26 @@
         let mediaStream = null;
         let registerMediaStream = null;
         
+        // Modal for full-size images
+        const modal = document.getElementById('imageModal');
+        const modalImg = document.getElementById('modalImage');
+        const closeModal = document.getElementsByClassName('close-modal')[0];
+        
+        closeModal.onclick = function() {
+            modal.style.display = "none";
+        }
+        
+        window.onclick = function(event) {
+            if (event.target == modal) {
+                modal.style.display = "none";
+            }
+        }
+        
+        function showFullImage(imageUrl) {
+            modal.style.display = "block";
+            modalImg.src = imageUrl;
+        }
+        
         // Initialize
         document.addEventListener('DOMContentLoaded', function() {
             console.log('Dashboard initializing...');
@@ -511,7 +624,7 @@
             initWebcam();
             initRegisterWebcam();
             loadAlerts();
-            setInterval(loadAlerts, 30000);
+            setInterval(loadAlerts, 15000); // Refresh every 15 seconds
             
             document.getElementById('unlockBtn').addEventListener('click', function() {
                 sendCommand('UNLOCK');
@@ -560,6 +673,8 @@
                     updateVehiclePosition(data.data);
                 } else if (data.type === 'LOCATION_HISTORY') {
                     loadLocationHistory(data.data);
+                } else if (data.type === 'COMMAND_UPDATE') {
+                    handleCommandUpdate(data.data);
                 }
             };
             
@@ -570,10 +685,22 @@
             };
         }
         
+        function handleCommandUpdate(data) {
+            if (data.command === 'UNLOCK') {
+                updateEngineStatus('UNLOCKED');
+            } else if (data.command === 'LOCK') {
+                updateEngineStatus('LOCKED');
+            }
+        }
+        
         function updateVehiclePosition(locationData) {
             const lat = parseFloat(locationData.latitude);
             const lng = parseFloat(locationData.longitude);
             currentLocation = { lat, lng };
+            
+            // Update stats
+            document.getElementById('speedValue').textContent = locationData.speed || 0;
+            document.getElementById('headingValue').textContent = locationData.heading || 0;
             
             if (vehicleMarker) {
                 vehicleMarker.setLatLng([lat, lng]);
@@ -760,7 +887,7 @@
             setTimeout(() => { registerMessage.innerHTML = ''; }, 3000);
         }
         
-        // Alerts
+        // Enhanced Alerts with Images
         async function loadAlerts() {
             try {
                 const response = await fetch('/alerts/alerts/');
@@ -769,20 +896,54 @@
                     const alertsList = document.getElementById('alertsList');
                     
                     if (alerts.length === 0) {
-                        alertsList.innerHTML = '<div style="text-align:center;color:#999;padding:20px;">No alerts</div>';
+                        alertsList.innerHTML = '<div style="text-align:center;color:#999;padding:20px;"><i class="fas fa-check-circle"></i> No security alerts</div>';
                         return;
                     }
                     
-                    alertsList.innerHTML = alerts.map(alert => `
-                        <div class="alert-item ${alert.severity.toLowerCase()}">
-                            <div class="alert-title">${alert.title}</div>
-                            <div>${alert.description}</div>
-                            <div class="alert-time">${new Date(alert.timestamp).toLocaleString()}</div>
-                        </div>
-                    `).join('');
+                    alertsList.innerHTML = alerts.map(alert => {
+                        // Determine severity badge
+                        let badgeHtml = '';
+                        if (alert.severity === 'HIGH') {
+                            badgeHtml = '<span class="badge badge-high">INTRUDER</span>';
+                        } else if (alert.severity === 'CRITICAL') {
+                            badgeHtml = '<span class="badge badge-critical">CRITICAL</span>';
+                        }
+                        
+                        // Image HTML if available
+                        let imageHtml = '';
+                        if (alert.image_url) {
+                            imageHtml = `<img src="${alert.image_url}" class="alert-image" onclick="showFullImage('${alert.image_url}')" title="Click to enlarge">`;
+                        } else if (alert.severity === 'HIGH') {
+                            // Default intruder icon if no image
+                            imageHtml = '<div style="margin-top:10px;"><i class="fas fa-user-secret" style="font-size: 40px; color: #dc3545;"></i></div>';
+                        }
+                        
+                        return `
+                            <div class="alert-item ${alert.severity.toLowerCase()}">
+                                <div class="alert-title">
+                                    <i class="fas ${getAlertIcon(alert.severity)}"></i>
+                                    ${alert.title}
+                                    ${badgeHtml}
+                                </div>
+                                <div class="alert-description">${alert.description}</div>
+                                ${imageHtml}
+                                <div class="alert-time">
+                                    <i class="far fa-clock"></i> ${new Date(alert.timestamp).toLocaleString()}
+                                </div>
+                            </div>
+                        `;
+                    }).join('');
                 }
             } catch (error) {
                 console.error('Error loading alerts:', error);
+            }
+        }
+        
+        function getAlertIcon(severity) {
+            switch(severity) {
+                case 'HIGH': return 'fa-exclamation-triangle';
+                case 'CRITICAL': return 'fa-skull-crossbones';
+                default: return 'fa-info-circle';
             }
         }
         
