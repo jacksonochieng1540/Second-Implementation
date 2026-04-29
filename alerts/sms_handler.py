@@ -14,10 +14,8 @@ class GSMHandler:
         self.port = port
         self.baudrate = baudrate
         self.serial_connection = None
-        self.is_connected = False
-        self.use_simulated = True  # Default to simulated
-        self.connect()
-    
+        self.use_simulated = True  # Set to False for real GSM
+        
     def connect(self):
         """Connect to GSM module"""
         try:
@@ -56,9 +54,11 @@ class GSMHandler:
             return False
             
         except Exception as e:
-            logger.warning(f"GSM connection error: {e}")
-            self.use_simulated = True
-            return False
+            logger.error(f"GSM connection error: {e}")
+        
+        # Use simulated mode for development
+        logger.info("Using simulated SMS mode")
+        return True
     
     def send_sms(self, phone_number, message):
         """Send SMS using GSM module or simulation"""
