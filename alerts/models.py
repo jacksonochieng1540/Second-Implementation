@@ -31,26 +31,32 @@ class Alert(models.Model):
         ordering = ['-timestamp']
         
     def save(self, *args, **kwargs):
-        """Send SMS alert when alert is created"""
+        """Save alert and send SMS if needed"""
+        is_new = self.pk is None
         super().save(*args, **kwargs)
         
-        if not self.sms_sent:
+        # Only send SMS for new HIGH/CRITICAL alerts
+        if is_new and self.severity in ['HIGH', 'CRITICAL'] and not self.sms_sent:
             self.send_sms_alert()
-    
+
     def send_sms_alert(self):
         """Send SMS notification for critical alerts"""
         if self.severity in ['HIGH', 'CRITICAL']:
-            from .sms_handler import gsm_handler
-            
-            # Get owner's phone number from user profile
-            owner_phone = '+254700000000'  # Configure this from user profile
-            
-            message = f"🚨 VEHICLE ALERT: {self.title}\n{self.description}\nTime: {self.timestamp.strftime('%Y-%m-%d %H:%M:%S')}"
-            
-            success = gsm_handler.send_sms(owner_phone, message)
-            if success:
-                self.sms_sent = True
-                super().save(update_fields=['sms_sent'])
+            try:
+                from .sms_handler import gsm_handler
+                
+                # Update this with your actual phone number
+                owner_phone = '+254792333250'
+                
+                message = f"🚨 ALERT: {self.title}\n{self.description[:100]}\nTime: {self.timestamp.strftime('%Y-%m-%d %H:%M:%S')}"
+                
+                success = gsm_handler.send_sms(owner_phone, message)
+                if success:
+                    self.sms_sent = True
+                    # Use update to avoid recursion
+                    Alert.objects.filter(pk=self.pk).update(sms_sent=True)
+            except Exception as e:
+                print(f"SMS error: {e}")
     
     def __str__(self):
         return f"{self.severity}: {self.title} - {self.timestamp}"
