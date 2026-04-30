@@ -1,89 +1,123 @@
 """
-GSM SMS Handler for Real SMS Alerts
+GSM SMS Handler - Real GSM Module on /dev/ttyS0
 """
 
 import serial
 import time
 import logging
-import threading
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
 class GSMHandler:
-    def __init__(self, port='/dev/ttyUSB0', baudrate=9600):
+    def __init__(self, port='/dev/ttyS0', baudrate=9600):
         self.port = port
         self.baudrate = baudrate
         self.serial_connection = None
-        self.use_simulated = True  # Set to False for real GSM
-        
-    def connect(self):
-        """Connect to GSM module"""
+        self.use_simulated = False
+        self.connect_gsm()
+    
+    def connect_gsm(self):
+        """Connect to GSM module on /dev/ttyS0"""
         try:
-            # Try multiple ports
-            ports_to_try = ['/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyACM0', '/dev/ttyS0']
+            logger.info(f"🔌 Connecting to GSM on {self.port}...")
             
-            for port in ports_to_try:
-                try:
-                    self.serial_connection = serial.Serial(port, self.baudrate, timeout=2)
-                    time.sleep(1)
-                    
-                    # Test AT command
-                    self.serial_connection.write(b'AT\r\n')
-                    time.sleep(0.5)
-                    response = self.serial_connection.read(100)
-                    
-                    if b'OK' in response:
-                        self.is_connected = True
-                        self.use_simulated = False
-                        self.port = port
-                        logger.info(f"✅ GSM module connected on {port}")
-                        return True
-                    else:
-                        self.serial_connection.close()
-                        self.serial_connection = None
-                        
-                except Exception as e:
-                    if self.serial_connection:
-                        self.serial_connection.close()
-                    self.serial_connection = None
-                    continue
+            # Open serial connection
+            self.serial_connection = serial.Serial(
+                self.port, 
+                self.baudrate, 
+                timeout=2,
+                bytesize=serial.EIGHTBITS,
+                parity=serial.PARITY_NONE,
+                stopbits=serial.STOPBITS_ONE
+            )
+            time.sleep(1)
             
-            # If we get here, no GSM module found
-            logger.warning("⚠️ No GSM module found - Using simulated SMS mode")
-            self.use_simulated = True
-            return False
+            # Test AT command
+            self.serial_connection.write(b'AT\r\n')
+            time.sleep(0.5)
+            response = self.serial_connection.read(100)
             
+            if b'OK' in response:
+                self.use_simulated = False
+                logger.info(f"✅ GSM module connected on {self.port}")
+                
+                # Initialize GSM
+                self.init_gsm()
+                return True
+            else:
+                logger.warning(f"GSM not responding on {self.port}")
+                self.serial_connection.close()
+                self.serial_connection = None
+                self.use_simulated = True
+                return False
+                
         except Exception as e:
             logger.error(f"GSM connection error: {e}")
-        
-        # Use simulated mode for development
-        logger.info("Using simulated SMS mode")
-        return True
+            self.use_simulated = True
+            return False
     
-    def send_sms(self, phone_number, message):
-        """Send SMS using GSM module or simulation"""
-        if self.use_simulated:
-            logger.info(f"[SIMULATED SMS] To: {phone_number}")
-            logger.info(f"[SIMULATED SMS] Message: {message}")
-            return True
-        
+    def init_gsm(self):
+        """Initialize GSM module"""
         try:
             # Set SMS text mode
             self.serial_connection.write(b'AT+CMGF=1\r\n')
             time.sleep(0.5)
             
-            # Set recipient
-            self.serial_connection.write(f'AT+CMGS="{phone_number}"\r\n'.encode())
+            # Set character set
+            self.serial_connection.write(b'AT+CSCS="GSM"\r\n')
             time.sleep(0.5)
             
-            # Send message
-            self.serial_connection.write(f'{message}\x1A'.encode())
-            time.sleep(2)
+            # Check signal quality
+            self.serial_connection.write(b'AT+CSQ\r\n')
+            time.sleep(0.5)
+            response = self.serial_connection.read(100)
+            logger.info(f"📶 Signal: {response}")
             
-            # Check response
+            # Check network registration
+            self.serial_connection.write(b'AT+CREG?\r\n')
+            time.sleep(0.5)
+            response = self.serial_connection.read(100)
+            logger.info(f"📡 Network: {response}")
+            
+            logger.info("✅ GSM module initialized")
+            return True
+            
+        except Exception as e:
+            logger.error(f"GSM init error: {e}")
+            return False
+    
+    def send_sms(self, phone_number, message):
+        """Send real SMS via GSM module"""
+        
+        if self.use_simulated:
+            logger.info("="*50)
+            logger.info("📱 [SIMULATED SMS]")
+            logger.info(f"   To: {phone_number}")
+            logger.info(f"   Message: {message}")
+            logger.info("="*50)
+            return True
+        
+        try:
+            # Ensure SMS text mode
+            self.serial_connection.write(b'AT+CMGF=1\r\n')
+            time.sleep(0.5)
+            
+            # Set recipient
+            cmd = f'AT+CMGS="{phone_number}"\r\n'
+            self.serial_connection.write(cmd.encode())
+            time.sleep(0.5)
+            
+            # Send message (Ctrl+Z = 0x1A)
+            self.serial_connection.write(f'{message}\x1A'.encode())
+            time.sleep(3)
+            
+            # Read response
             response = self.serial_connection.read(200)
+            
             if b'+CMGS' in response or b'OK' in response:
-                logger.info(f"✅ SMS sent to {phone_number}")
+                logger.info(f"✅ REAL SMS sent to {phone_number}")
+                logger.info(f"   Message: {message[:50]}...")
                 return True
             else:
                 logger.error(f"❌ SMS failed: {response}")
@@ -93,20 +127,25 @@ class GSMHandler:
             logger.error(f"SMS error: {e}")
             return False
     
-    def check_balance(self):
-        """Check SMS balance (optional)"""
+    def check_status(self):
+        """Check GSM module status"""
         if self.use_simulated:
-            logger.info("[SIMULATED] Balance: $10 (simulated)")
-            return "Simulated balance"
+            return "SIMULATED MODE"
         
         try:
-            self.serial_connection.write(b'AT+CBC\r\n')
+            self.serial_connection.write(b'AT\r\n')
             time.sleep(0.5)
-            response = self.serial_connection.read(100)
-            logger.info(f"Battery status: {response}")
-            return response
+            if b'OK' in self.serial_connection.read(50):
+                return "CONNECTED"
+            return "ERROR"
         except:
-            return "Unknown"
+            return "DISCONNECTED"
 
-# Global instance
+# Create global instance
 gsm_handler = GSMHandler()
+
+# Print status
+if not gsm_handler.use_simulated:
+    logger.info("📱 REAL GSM MODE ACTIVE - SMS will be sent to your phone")
+else:
+    logger.info("📱 SIMULATED MODE - Check GSM module connection")
