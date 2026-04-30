@@ -7,7 +7,7 @@ class VehicleTrackingConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         self.room_group_name = 'vehicle_tracking'
         
-        # Join room group
+  
         await self.channel_layer.group_add(
             self.room_group_name,
             self.channel_name
