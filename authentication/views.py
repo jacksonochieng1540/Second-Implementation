@@ -8,6 +8,8 @@ from django.contrib.auth.models import User
 from .models import UserProfile
 from .face_recognizer import face_recognizer
 import logging
+from django.contrib.auth.forms import UserCreationForm
+from django.shortcuts import redirect
 
 logger = logging.getLogger(__name__)
 
@@ -103,3 +105,14 @@ def face_login(request):
     except Exception as e:
         print(f"❌ Error: {e}")
         return Response({'error': str(e)}, status=500)
+
+
+def register(request):
+    if request.method == 'POST':
+        form = UserCreationForm(request.POST)
+        if form.is_valid():
+            form.save()
+            return redirect('login')
+    else:
+        form = UserCreationForm()
+    return render(request, 'register.html', {'form': form})
