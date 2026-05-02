@@ -11,6 +11,7 @@ from .serializers import VehicleCommandSerializer
 from vehicle_tracking.models import VehicleLocation
 from alerts.models import Alert
 from django.contrib.auth.models import User
+from django.views.decorators.csrf import csrf_exempt
 import base64
 from django.core.files.base import ContentFile
 import os
@@ -21,6 +22,7 @@ from authentication.face_recognizer import face_recognizer
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def send_command(request):
+    """Send LOCK or UNLOCK command to Raspberry Pi"""
     command = request.data.get('command')
     
     if command not in ['LOCK', 'UNLOCK']:
@@ -50,7 +52,7 @@ def send_command(request):
         description=f"User {user.username} sent {command} command"
     )
     
-    # Broadcast via WebSocket
+    # Broadcast via WebSocket for real-time dashboard update
     channel_layer = get_channel_layer()
     async_to_sync(channel_layer.group_send)(
         'vehicle_tracking',
@@ -65,106 +67,122 @@ def send_command(request):
         }
     )
     
+    print(f"📡 Command created: {command} (ID: {vehicle_command.id})")
+    
     serializer = VehicleCommandSerializer(vehicle_command)
     return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
+@csrf_exempt
 def face_auth(request):
-    """Face authentication"""
+    """Face authentication - ONLY registered user can unlock engine"""
     from authentication.face_recognizer import face_recognizer
-    from .models import VehicleCommand
+    from .models import VehicleCommand, EventLog
     from alerts.models import Alert
-    import base64
-    from django.core.files.base import ContentFile
-    import os
+    from channels.layers import get_channel_layer
+    from asgiref.sync import async_to_sync
     
     face_image = request.data.get('face_image')
     
     if not face_image:
         return Response({'error': 'Face image required'}, status=400)
     
-    print("\n" + "="*50)
-    print("🔐 FACE AUTHENTICATION")
-    print("="*50)
+    print("\n" + "🔐"*25)
+    print("FACE AUTHENTICATION FOR ENGINE UNLOCK")
+    print("🔐"*25)
     
-    result, username, confidence = face_recognizer.authenticate_face(face_image)
+    # This will ONLY return username if face MATCHES a registered face
+    username, confidence, message = face_recognizer.authenticate_face(face_image)
     
-    if result == 'RECOGNIZED':
-        user = User.objects.get(username=username)
-        command = VehicleCommand.objects.create(command='UNLOCK', user=user)
-        print(f"✅ RECOGNIZED: {username} - UNLOCK #{command.id}")
-        
-        return Response({
-            'success': True,
-            'message': f'Welcome {username}! Engine unlocking...',
-            'user': username
-        }, status=200)
-    
-    elif result == 'NO_FACE':
-        print("📷 NO_FACE - No face detected")
-        return Response({
-            'success': False,
-            'message': 'No face detected'
-        }, status=200)
-    
-    else:  # NOT_RECOGNIZED - UNAUTHORIZED ACCESS
-        print("🚫 NOT_RECOGNIZED - Unauthorized access - Creating alert with image")
-        
-        # Create alert
-        alert = Alert.objects.create(
-            title='UNAUTHORIZED ACCESS ATTEMPT',
-            description='An unrecognized face attempted to access the vehicle',
-            severity='HIGH'
-        )
-        
-        # Save the intruder image
+    if username:
         try:
-            # Remove data URL prefix if present
-            if ',' in face_image:
-                image_data = base64.b64decode(face_image.split(',')[1])
-            else:
-                image_data = base64.b64decode(face_image)
+            user, created = User.objects.get_or_create(
+                username=username,
+                defaults={'email': f'{username}@example.com'}
+            )
+            if created:
+                user.set_password(f'{username}pass123')
+                user.save()
+                print(f"✅ Auto-created user: {username}")
             
-            # Ensure media/alerts directory exists
-            os.makedirs('media/alerts', exist_ok=True)
+            # Create UNLOCK command
+            command = VehicleCommand.objects.create(command='UNLOCK', user=user)
             
-            # Save the image
-            filename = f'intruder_{alert.id}.jpg'
-            alert.image.save(filename, ContentFile(image_data))
-            print(f"📸 Intruder image saved for alert {alert.id}")
+            # Log event
+            EventLog.objects.create(
+                user=user,
+                event_type='FACE_AUTH',
+                description=f"Face authentication successful for {user.username}"
+            )
+            
+            print(f"\n✅✅✅ AUTHENTICATED: {username} ({confidence:.1f}% confidence) ✅✅✅")
+            print(f"UNLOCK command #{command.id} created")
+            
+            # Broadcast via WebSocket
+            channel_layer = get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                'vehicle_tracking',
+                {
+                    'type': 'command_update',
+                    'data': {
+                        'command': 'UNLOCK',
+                        'status': 'pending',
+                        'user': username,
+                        'timestamp': command.timestamp.isoformat()
+                    }
+                }
+            )
+            
+            return Response({
+                'success': True,
+                'message': f'Welcome {username}! Engine unlocking...',
+                'user': username,
+                'confidence': confidence
+            }, status=200)
             
         except Exception as e:
-            print(f"Failed to save image: {e}")
+            print(f"❌ User error: {e}")
+    
+    # CREATE ALERT FOR INTRUDER WITH IMAGE
+    print(f"\n❌❌❌ ACCESS DENIED: {message} ❌❌❌")
+    
+    alert = Alert.objects.create(
+        title='UNAUTHORIZED ACCESS ATTEMPT',
+        description=f'An unrecognized person attempted to access the vehicle. {message}',
+        severity='HIGH'
+    )
+    
+    # Save the intruder face image
+    try:
+        if ',' in face_image:
+            image_data = base64.b64decode(face_image.split(',')[1])
+        else:
+            image_data = base64.b64decode(face_image)
         
-        return Response({ 
-            'success': False,
-            'message': 'Face not recognized - Access denied. Alert created.',
-            'alert_id': alert.id
-        }, status=401)
+        os.makedirs('media/alerts', exist_ok=True)
+        filename = f'intruder_{alert.id}.jpg'
+        alert.image.save(filename, ContentFile(image_data))
+        print(f"📸 Intruder image saved for alert {alert.id}")
+    except Exception as img_error:
+        print(f"Failed to save image: {img_error}")
+    
+    return Response({
+        'success': False,
+        'message': 'Access denied - Face not recognized. Alert created.',
+        'alert_id': alert.id
+    }, status=401)
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def create_alert(request):
     """Create alert from hardware with intruder image"""
-    import base64
-    from django.core.files.base import ContentFile
-    import os
-    
     try:
         title = request.data.get('title', 'Security Alert')
         description = request.data.get('description', '')
         severity = request.data.get('severity', 'MEDIUM')
         location = request.data.get('location', {})
-        face_image = request.data.get('face_image')  # Base64 encoded intruder face
-        
-        print(f"\n📝 Creating alert: {title}")
-        print(f"   Severity: {severity}")
-        print(f"   Face image provided: {bool(face_image)}")
-        
-        if face_image:
-            print(f"   Image data length: {len(face_image)} chars")
-            print(f"   Image starts with: {face_image[:50]}...")
+        face_image = request.data.get('face_image')
         
         alert = Alert.objects.create(
             title=title,
@@ -174,45 +192,20 @@ def create_alert(request):
             location_lng=location.get('longitude')
         )
         
-        # Save the intruder image if provided
-        image_saved = False
-        image_path = None
-        
         if face_image:
             try:
-                # Remove data URL prefix if present
                 if ',' in face_image:
                     image_data = base64.b64decode(face_image.split(',')[1])
                 else:
                     image_data = base64.b64decode(face_image)
                 
-                # Ensure media/alerts directory exists
                 os.makedirs('media/alerts', exist_ok=True)
-                
-                # Save the image
                 filename = f'intruder_{alert.id}.jpg'
-                full_path = os.path.join('media/alerts', filename)
-                
-                with open(full_path, 'wb') as f:
-                    f.write(image_data)
-                
-                # Also save via Django's ImageField
                 alert.image.save(filename, ContentFile(image_data))
-                image_saved = True
-                image_path = full_path
-                
-                print(f"📸 Intruder image saved for alert {alert.id}")
-                print(f"   Path: {full_path}")
-                print(f"   Size: {len(image_data)} bytes")
-                
+                print(f"📸 Image saved for alert {alert.id}")
             except Exception as img_error:
-                print(f"❌ Failed to save image: {img_error}")
-                import traceback
-                traceback.print_exc()
-        else:
-            print("⚠️ No face image provided in request")
+                print(f"Failed to save image: {img_error}")
         
-        # Send SMS notification (optional, handle gracefully)
         try:
             from alerts.sms_handler import gsm_handler
             owner_phone = '+254792333250'
@@ -220,15 +213,6 @@ def create_alert(request):
         except Exception as e:
             print(f"SMS error: {e}")
         
-        return Response({
-            'id': alert.id,
-            'message': 'Alert created',
-            'image_saved': image_saved,
-            'image_path': image_path
-        }, status=201)
-        
+        return Response({'id': alert.id, 'message': 'Alert created'}, status=201)
     except Exception as e:
-        print(f"❌ Create alert error: {e}")
-        import traceback
-        traceback.print_exc()
         return Response({'error': str(e)}, status=500)
