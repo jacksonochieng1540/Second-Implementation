@@ -84,6 +84,7 @@ class FaceRecognizer:
     def authenticate_face(self, image_base64, tolerance=0.5):
         """
         STRICT authentication - ONLY returns match if distance is very low
+        Returns: (username, confidence, message) or (None, 0, message)
         """
         print(f"\n🔍 STRICT AUTHENTICATION")
         print("-" * 40)
@@ -91,11 +92,11 @@ class FaceRecognizer:
         face_encoding = self.get_face_encoding(image_base64)
         if face_encoding is None:
             print("📷 NO_FACE")
-            return 'NO_FACE', None, None
+            return None, 0, "NO_FACE"
         
         if len(self.known_face_encodings) == 0:
             print("📷 NOT_RECOGNIZED - No authorized users")
-            return 'NOT_RECOGNIZED', None, None
+            return None, 0, "NOT_RECOGNIZED - No registered faces"
         
         # Calculate distances to all known faces
         distances = []
@@ -114,14 +115,21 @@ class FaceRecognizer:
         print(f"   Confidence: {confidence:.1f}%")
         print(f"   Required: distance < {tolerance} to authorize")
         
+        # Print all comparisons for debugging
+        print("\n   All comparisons:")
+        for i, (name, dist) in enumerate(zip(self.known_face_names, distances)):
+            conf = (1 - min(dist, 1.0)) * 100
+            match_status = "✅" if dist < tolerance else "❌"
+            print(f"   {match_status} {name}: distance={dist:.4f}, confidence={conf:.1f}%")
+        
         # STRICT CHECK - ONLY authorize if distance is very small
         if best_distance < tolerance:
-            print(f"\n✅✅✅ AUTHORIZED: {best_name} (distance={best_distance:.4f})")
-            return 'RECOGNIZED', best_name, confidence
+            print(f"\n✅✅✅ AUTHORIZED: {best_name} ({confidence:.1f}% confidence)")
+            return best_name, confidence, f"Welcome back {best_name}!"
         else:
             print(f"\n❌ DENIED: Face does not match any authorized user")
             print(f"   (Closest match was {best_name} but distance {best_distance:.4f} > {tolerance})")
-            return 'NOT_RECOGNIZED', None, None
+            return None, confidence, f"NOT_RECOGNIZED (closest: {best_name})"
 
 # Create instance
 face_recognizer = FaceRecognizer()
