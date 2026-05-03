@@ -35,7 +35,6 @@ class Alert(models.Model):
         is_new = self.pk is None
         super().save(*args, **kwargs)
         
-        # Only send SMS for new HIGH/CRITICAL alerts
         if is_new and self.severity in ['HIGH', 'CRITICAL'] and not self.sms_sent:
             self.send_sms_alert()
 
@@ -45,7 +44,7 @@ class Alert(models.Model):
             try:
                 from .sms_handler import gsm_handler
                 
-                # Update this with your actual phone number
+            
                 owner_phone = '+254792333250'
                 
                 message = f"🚨 ALERT: {self.title}\n{self.description[:100]}\nTime: {self.timestamp.strftime('%Y-%m-%d %H:%M:%S')}"
@@ -53,7 +52,6 @@ class Alert(models.Model):
                 success = gsm_handler.send_sms(owner_phone, message)
                 if success:
                     self.sms_sent = True
-                    # Use update to avoid recursion
                     Alert.objects.filter(pk=self.pk).update(sms_sent=True)
             except Exception as e:
                 print(f"SMS error: {e}")
