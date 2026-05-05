@@ -252,7 +252,7 @@ class VehicleHardware:
             GPIO.output(RELAY_PIN, GPIO.LOW)
             self.engine_locked = True
             logger.info("🔒 ENGINE LOCKED - Relay OFF")
-            # SMS #1: Engine LOCKED (already working)
+            # Send SMS alert for engine lock
             self.send_sms("ENGINE LOCKED - Vehicle immobilized")
             return True
         except Exception as e:
@@ -264,7 +264,7 @@ class VehicleHardware:
             GPIO.output(RELAY_PIN, GPIO.HIGH)
             self.engine_locked = False
             logger.info("🔓 ENGINE UNLOCKED - Relay ON")
-            # SMS #2: Engine UNLOCKED (ADD THIS)
+            # Send SMS alert for engine unlock
             self.send_sms("ENGINE UNLOCKED - Vehicle operational")
             return True
         except Exception as e:
@@ -339,7 +339,7 @@ class VehicleHardware:
             return True
     
     def send_intruder_sms_alert(self):
-        """SMS #3: Send intruder SMS alert"""
+        """Send dedicated SMS alert for intruder detection"""
         message = "INTRUSION DETECTED! Check web app for more details!"
         logger.info(f"🚨🚨🚨 SENDING INTRUDER SMS: {message} 🚨🚨🚨")
         return self.send_sms(message)
@@ -484,12 +484,12 @@ class VehicleSecuritySystem:
                 
                 if command == 'UNLOCK':
                     logger.info("🔓 Executing UNLOCK...")
-                    if self.hardware.unlock_engine():  # This will send UNLOCK SMS
+                    if self.hardware.unlock_engine():
                         self.cloud.mark_executed(command_id)
                         logger.info(f"✅ Command {command_id} marked as executed")
                 elif command == 'LOCK':
                     logger.info("🔒 Executing LOCK...")
-                    if self.hardware.lock_engine():  # This will send LOCK SMS
+                    if self.hardware.lock_engine():
                         self.cloud.mark_executed(command_id)
                         logger.info(f"✅ Command {command_id} marked as executed")
             
@@ -503,7 +503,7 @@ class VehicleSecuritySystem:
             time.sleep(GPS_UPDATE_INTERVAL)
     
     def intruder_loop(self):
-        """Check for unauthorized access and send intruder SMS"""
+        """Check for unauthorized access and capture intruder images"""
         last_alert_time = 0
         
         while self.running:
@@ -520,17 +520,17 @@ class VehicleSecuritySystem:
                     logger.info("✅ Authorized face detected")
                     if self.hardware.engine_locked:
                         logger.info("🔓 Authorized user - UNLOCKING engine")
-                        self.hardware.unlock_engine()  # This will send UNLOCK SMS
+                        self.hardware.unlock_engine()
                 else:
-                    logger.warning("⚠️ Unauthorized face detected - Sending alert")
+                    logger.warning("⚠️ Unauthorized face detected - Sending alert with image")
                     
-                    # Send alert with image and SMS (rate limited to once per 30 seconds)
+                    # Send alert with image (rate limited to once per 30 seconds)
                     current_time = time.time()
                     if current_time - last_alert_time > 30:
                         logger.info("📸 Sending intruder alert with captured image...")
                         self.cloud.send_intruder_alert(face_image)
                         
-                        # SMS #3: Send intruder SMS
+                        # Send SMS alert for intruder
                         self.hardware.send_intruder_sms_alert()
                         
                         last_alert_time = current_time
@@ -557,9 +557,8 @@ class VehicleSecuritySystem:
         logger.info("📡 Waiting for commands from cloud...")
         logger.info("👤 Intruder detection active - unauthorized faces will be captured")
         logger.info("📱 REAL SMS alerts active for:")
-        logger.info("   - SMS #1: ENGINE LOCKED (immobilized)")
-        logger.info("   - SMS #2: ENGINE UNLOCKED (operational)")
-        logger.info("   - SMS #3: INTRUSION DETECTED (unauthorized face)")
+        logger.info("   - Engine LOCK/UNLOCK events")
+        logger.info("   - Intruder detection")
         logger.info("Press Ctrl+C to stop")
         
         try:
