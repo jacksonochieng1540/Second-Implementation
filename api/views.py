@@ -15,9 +15,15 @@ from django.views.decorators.csrf import csrf_exempt
 import base64
 from django.core.files.base import ContentFile
 import os
+import requests  # ADDED for sending to Raspberry Pi
 
 # Import the working face recognizer
 from authentication.face_recognizer import face_recognizer
+
+# ============= RASPBERRY PI CONFIGURATION =============
+PI_API_URL = "http://10.251.159.168:5000"  # Your Raspberry Pi IP address
+PI_API_KEY = "mysecurekey123"
+
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
@@ -72,11 +78,12 @@ def send_command(request):
     serializer = VehicleCommandSerializer(vehicle_command)
     return Response(serializer.data, status=status.HTTP_201_CREATED)
 
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 @csrf_exempt
 def face_auth(request):
-    """Face authentication - ONLY registered user can unlock engine"""
+    """Face authentication - sends intruder alert to Raspberry Pi for SMS"""
     from authentication.face_recognizer import face_recognizer
     from .models import VehicleCommand, EventLog
     from alerts.models import Alert
@@ -144,9 +151,11 @@ def face_auth(request):
         except Exception as e:
             print(f"❌ User error: {e}")
     
-    # CREATE ALERT FOR INTRUDER WITH IMAGE
+    # ========== INTRUDER DETECTED - SEND ALERT TO RASPBERRY PI ==========
     print(f"\n❌❌❌ ACCESS DENIED: {message} ❌❌❌")
+    print("🚨 INTRUDER DETECTED - Sending alert to Raspberry Pi for SMS 🚨")
     
+    # Create alert in database
     alert = Alert.objects.create(
         title='UNAUTHORIZED ACCESS ATTEMPT',
         description=f'An unrecognized person attempted to access the vehicle. {message}',
@@ -154,6 +163,7 @@ def face_auth(request):
     )
     
     # Save the intruder face image
+    image_saved = False
     try:
         if ',' in face_image:
             image_data = base64.b64decode(face_image.split(',')[1])
@@ -163,20 +173,58 @@ def face_auth(request):
         os.makedirs('media/alerts', exist_ok=True)
         filename = f'intruder_{alert.id}.jpg'
         alert.image.save(filename, ContentFile(image_data))
+        image_saved = True
         print(f"📸 Intruder image saved for alert {alert.id}")
     except Exception as img_error:
         print(f"Failed to save image: {img_error}")
     
+    # ========== SEND ALERT TO RASPBERRY PI FOR SMS ==========
+    pi_alert_sent = False
+    try:
+        print(f"\n📡 Sending intruder alert to Raspberry Pi at {PI_API_URL}...")
+        
+        response = requests.post(
+            f"{PI_API_URL}/intruder-alert",
+            headers={
+                'X-API-KEY': PI_API_KEY,
+                'Content-Type': 'application/json'
+            },
+            json={
+                'alert_type': 'intruder',
+                'alert_id': alert.id,
+                'message': 'INTRUSION DETECTED! Check web app for more details!'
+            },
+            timeout=5
+        )
+        
+        if response.status_code == 200:
+            pi_alert_sent = True
+            print("✅✅✅ Intruder alert sent to Raspberry Pi! ✅✅✅")
+            print("📱 Raspberry Pi will send SMS to your phone!")
+        else:
+            print(f"❌ Raspberry Pi returned error: {response.status_code}")
+            
+    except requests.exceptions.ConnectionError:
+        print(f"❌ Cannot connect to Raspberry Pi at {PI_API_URL}")
+        print("   Make sure pi_working.py is running on Raspberry Pi")
+        print("   Check: ssh pi@10.251.159.168 and run python3 pi_working.py")
+    except Exception as e:
+        print(f"❌ Error sending to Raspberry Pi: {e}")
+    
     return Response({
         'success': False,
-        'message': 'Access denied - Face not recognized. Alert created.',
-        'alert_id': alert.id
+        'message': 'Access denied - Face not recognized. Alert sent to Raspberry Pi for SMS.',
+        'alert_id': alert.id,
+        'image_saved': image_saved,
+        'pi_alert_sent': pi_alert_sent
     }, status=401)
+
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def create_alert(request):
     """Create alert from hardware with intruder image"""
+    
     try:
         title = request.data.get('title', 'Security Alert')
         description = request.data.get('description', '')
@@ -206,13 +254,11 @@ def create_alert(request):
             except Exception as img_error:
                 print(f"Failed to save image: {img_error}")
         
-        try:
-            from alerts.sms_handler import gsm_handler
-            owner_phone = '+254792333250'
-            gsm_handler.send_sms(owner_phone, f"🚨 ALERT: {title}")
-        except Exception as e:
-            print(f"SMS error: {e}")
+        return Response({
+            'id': alert.id, 
+            'message': 'Alert created',
+            'image_saved': bool(face_image)
+        }, status=201)
         
-        return Response({'id': alert.id, 'message': 'Alert created'}, status=201)
     except Exception as e:
         return Response({'error': str(e)}, status=500)
