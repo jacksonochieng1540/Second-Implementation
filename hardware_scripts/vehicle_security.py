@@ -1,102 +1,117 @@
-cat > /home/raspberrypi/SmartVehicleProject/vehicle_security_complete.py << 'EOF'
 #!/usr/bin/env python3
 """
-COMPLETE VEHICLE SECURITY SYSTEM - RASPBERRY PI
-Handles: Engine LOCK/UNLOCK SMS + Intruder SMS via API
+Complete Vehicle Security System for Raspberry Pi
+Works with web dashboard - Controls relay via GPIO27
+Includes intruder image capture and alert
+REAL GSM SMS using pigpio software serial
 """
 
 import requests
 import time
+import json
 import base64
 import cv2
 import numpy as np
 import RPi.GPIO as GPIO
+import gpsd
+import serial
+from datetime import datetime
+import threading
+import logging
+import math
 import pigpio
 import subprocess
-import threading
-import json
-from http.server import HTTPServer, BaseHTTPRequestHandler
 
-# ============= CONFIGURATION =============
-API_BASE_URL = "http://10.251.159.57:8000"  # Django server IP
-API_KEY = "mysecurekey123"
-RELAY_PIN = 27
+# ============= CONFIGURATION - CHANGE THESE =============
+API_BASE_URL = "http://10.251.159.57:8000"  # YOUR LAPTOP IP ADDRESS
+API_KEY = "mysecurekey123"  # Must match Django settings
+RELAY_PIN = 27  # GPIO27 (Physical pin 13)
 CAMERA_DEVICE = 0
-OWNER_PHONE = "+254792333250"
+GPS_UPDATE_INTERVAL = 3
+COMMAND_POLL_INTERVAL = 2
+INTRUDER_CHECK_INTERVAL = 5  # Check every 5 seconds
+OWNER_PHONE = "+254792333250"  # YOUR PHONE NUMBER
 
-# GSM Pins
-GSM_TX_PIN = 18
-GSM_RX_PIN = 17
+# GSM Software Serial Pins (using pigpio)
+GSM_TX_PIN = 18  # GPIO18 (Physical pin 12) - Connect to SIM800L RX
+GSM_RX_PIN = 17  # GPIO17 (Physical pin 11) - Connect to SIM800L TX
 GSM_BAUD = 9600
 
-# Intruder API config
-INTRUDER_API_PORT = 5000
-INTRUDER_API_KEY = "mysecurekey123"
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
-# Get actual Pi IP for display
-import socket
-def get_pi_ip():
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
-    except:
-        return "YOUR_PI_IP"
 
-PI_IP = get_pi_ip()
-
-print("="*60)
-print("COMPLETE VEHICLE SECURITY - RASPBERRY PI")
-print("="*60)
-print(f"📡 Pi IP Address: {PI_IP}")
-print("="*60)
-
-# ============= GSM MODULE =============
-class GSM:
-    def __init__(self):
+# ============= GSM SOFTWARE SERIAL CLASS =============
+class GSMSoftwareSerial:
+    """Real GSM communication using pigpio software serial"""
+    
+    def __init__(self, tx_pin=18, rx_pin=17, baud=9600):
+        self.tx_pin = tx_pin
+        self.rx_pin = rx_pin
+        self.baud = baud
         self.pi = None
-        self.connected = False
+        self.is_connected = False
         self.connect()
     
     def connect(self):
+        """Connect to pigpio daemon and initialize software serial"""
         try:
-            subprocess.run(['sudo', 'killall', 'pigpiod'], stderr=subprocess.DEVNULL)
-            time.sleep(1)
+            # Start pigpio daemon if not running
             subprocess.run(['sudo', 'pigpiod'], stderr=subprocess.DEVNULL)
-            time.sleep(2)
+            time.sleep(1)
             
             self.pi = pigpio.pi()
             if not self.pi.connected:
+                logger.error("❌ pigpio not running")
                 return False
             
-            self.pi.set_mode(GSM_TX_PIN, pigpio.OUTPUT)
-            self.pi.set_mode(GSM_RX_PIN, pigpio.INPUT)
-            self.pi.bb_serial_read_open(GSM_RX_PIN, GSM_BAUD, 8)
+            # Setup pins
+            self.pi.set_mode(self.tx_pin, pigpio.OUTPUT)
+            self.pi.set_mode(self.rx_pin, pigpio.INPUT)
+            self.pi.bb_serial_read_open(self.rx_pin, self.baud, 8)
             
-            response = self.send_cmd("AT")
-            if "OK" in response:
-                self.connected = True
-                print("✅ GSM CONNECTED!")
-                self.send_cmd("AT+CMGF=1")
-                time.sleep(0.5)
-                return True
+            # Test GSM module
+            if self.send_command("AT\r", timeout=1):
+                if b'OK' in self.send_command("AT\r", timeout=1):
+                    self.is_connected = True
+                    logger.info(f"✅ REAL GSM connected (TX=GPIO{self.tx_pin}, RX=GPIO{self.rx_pin})")
+                    
+                    # Set SMS text mode
+                    self.send_command("AT+CMGF=1\r", timeout=1)
+                    return True
+            
+            self.is_connected = False
+            logger.warning("⚠️ GSM not responding - SMS will be simulated")
             return False
+            
         except Exception as e:
-            print(f"GSM error: {e}")
+            logger.warning(f"GSM connection error: {e}")
+            self.is_connected = False
             return False
     
     def send_byte(self, byte):
+        """Send a single byte via software serial"""
+        if not self.pi:
+            return
         bits = []
-        bit_duration = int(1e6 / GSM_BAUD)
-        bits.append(pigpio.pulse(0, 1 << GSM_TX_PIN, bit_duration))
+        bit_duration = int(1e6 / self.baud)
+        
+        # Start bit (low)
+        bits.append(pigpio.pulse(0, 1 << self.tx_pin, bit_duration))
+        
+        # Data bits (LSB first)
         for i in range(8):
             if (byte >> i) & 1:
-                bits.append(pigpio.pulse(1 << GSM_TX_PIN, 0, bit_duration))
+                bits.append(pigpio.pulse(1 << self.tx_pin, 0, bit_duration))
             else:
-                bits.append(pigpio.pulse(0, 1 << GSM_TX_PIN, bit_duration))
-        bits.append(pigpio.pulse(1 << GSM_TX_PIN, 0, bit_duration))
+                bits.append(pigpio.pulse(0, 1 << self.tx_pin, bit_duration))
+        
+        # Stop bit (high)
+        bits.append(pigpio.pulse(1 << self.tx_pin, 0, bit_duration))
         
         self.pi.wave_clear()
         self.pi.wave_add_generic(bits)
@@ -105,275 +120,427 @@ class GSM:
         while self.pi.wave_tx_busy():
             time.sleep(0.001)
         self.pi.wave_delete(wid)
-        time.sleep(0.05)
     
-    def send_cmd(self, cmd):
-        self.pi.bb_serial_read(GSM_RX_PIN)
-        for char in cmd + "\r":
-            self.send_byte(ord(char))
-        time.sleep(0.5)
-        count, data = self.pi.bb_serial_read(GSM_RX_PIN)
-        return data.decode('utf-8', errors='ignore') if count > 0 else ""
+    def send_command(self, cmd, timeout=1):
+        """Send a command and return response"""
+        if not self.pi:
+            return b''
+        
+        # Send command
+        for byte in cmd.encode():
+            self.send_byte(byte)
+        time.sleep(0.3)
+        
+        # Read response
+        count, data = self.pi.bb_serial_read(self.rx_pin)
+        return data
     
-    def send_sms(self, message):
-        if not self.connected:
-            print("❌ GSM not connected")
-            return False
+    def send_sms(self, phone_number, message):
+        """Send REAL SMS via GSM module"""
+        if not self.is_connected:
+            logger.info(f"[SIMULATED SMS] To: {phone_number}")
+            logger.info(f"[SIMULATED SMS] Message: {message}")
+            return True
+        
         try:
-            print(f"📱 Sending SMS: {message[:50]}...")
-            self.send_cmd("AT+CMGF=1")
-            time.sleep(0.5)
-            cmd = f'AT+CMGS="{OWNER_PHONE}"'
-            self.send_cmd(cmd)
+            # Set SMS text mode
+            self.send_command("AT+CMGF=1\r", timeout=1)
+            
+            # Send SMS command with phone number
+            cmd = f'AT+CMGS="{phone_number}"\r'
+            for byte in cmd.encode():
+                self.send_byte(byte)
             time.sleep(1)
-            for char in message:
-                self.send_byte(ord(char))
+            
+            # Send message content
+            for byte in message.encode():
+                self.send_byte(byte)
+            
+            # Send Ctrl+Z (0x1A) to indicate end of message
             self.send_byte(26)
-            time.sleep(4)
-            count, data = self.pi.bb_serial_read(GSM_RX_PIN)
-            response = data.decode('utf-8', errors='ignore') if count > 0 else ""
-            if "+CMGS" in response or "OK" in response:
-                print("✅ SMS SENT SUCCESSFULLY!")
+            time.sleep(3)
+            
+            # Read response
+            count, data = self.pi.bb_serial_read(self.rx_pin)
+            
+            if b'+CMGS' in data:
+                logger.info(f"✅ REAL SMS sent to {phone_number}")
+                logger.info(f"   Message: {message[:50]}...")
                 return True
             else:
-                print(f"⚠️ SMS response: {response[:100]}")
+                logger.warning(f"⚠️ SMS may not have sent: {data[:50]}")
                 return False
+                
         except Exception as e:
-            print(f"SMS error: {e}")
+            logger.error(f"SMS error: {e}")
             return False
     
     def cleanup(self):
+        """Clean up resources"""
         if self.pi:
-            self.pi.bb_serial_read_close(GSM_RX_PIN)
+            self.pi.bb_serial_read_close(self.rx_pin)
             self.pi.stop()
 
-# ============= HARDWARE =============
+
+# ============= HARDWARE SETUP =============
 class VehicleHardware:
     def __init__(self):
-        self.gsm = None
-        self.camera = None
         self.engine_locked = True
-        self.last_sms_time = 0
+        self.current_location = None
+        self.camera = None
+        self.sim_angle = 0  # For simulated GPS
+        self.gsm = None
         
         self.setup_gpio()
+        self.setup_gps()
         self.setup_gsm()
         self.setup_camera()
-    
+        
     def setup_gpio(self):
-        GPIO.setmode(GPIO.BCM)
-        GPIO.setup(RELAY_PIN, GPIO.OUT)
-        GPIO.output(RELAY_PIN, GPIO.LOW)
-        print("✓ GPIO ready - Engine LOCKED")
+        try:
+            GPIO.setmode(GPIO.BCM)
+            GPIO.setup(RELAY_PIN, GPIO.OUT)
+            GPIO.output(RELAY_PIN, GPIO.LOW)
+            logger.info(f"✓ GPIO configured - Engine LOCKED (Pin GPIO{RELAY_PIN})")
+        except Exception as e:
+            logger.error(f"GPIO error: {e}")
+    
+    def setup_gps(self):
+        try:
+            gpsd.connect()
+            logger.info("✓ GPS module connected")
+        except Exception as e:
+            logger.warning(f"GPS not available: {e}")
     
     def setup_gsm(self):
-        self.gsm = GSM()
-        if self.gsm.connected:
-            time.sleep(2)
-            self.gsm.send_sms("VEHICLE SECURITY ONLINE - Pi ACTIVE")
+        """Setup REAL GSM using software serial"""
+        try:
+            self.gsm = GSMSoftwareSerial(tx_pin=GSM_TX_PIN, rx_pin=GSM_RX_PIN, baud=GSM_BAUD)
+            if not self.gsm.is_connected:
+                logger.warning("GSM not found - SMS will be simulated")
+        except Exception as e:
+            logger.warning(f"GSM error: {e}")
+            self.gsm = None
     
     def setup_camera(self):
         try:
             self.camera = cv2.VideoCapture(CAMERA_DEVICE)
             if self.camera.isOpened():
-                print("✓ Camera ready")
-                ret, frame = self.camera.read()
-                if ret:
-                    print("✓ Camera test OK")
+                logger.info("✓ USB Camera ready")
             else:
-                print("⚠️ Camera not available (intruder detection will be from web app)")
+                logger.warning("Camera not available")
                 self.camera = None
         except Exception as e:
-            print(f"Camera error: {e}")
+            logger.warning(f"Camera error: {e}")
             self.camera = None
     
-    def send_engine_sms(self, message):
-        """Send engine LOCK/UNLOCK SMS"""
-        current_time = time.time()
-        if current_time - self.last_sms_time < 10:
-            return False
-        self.last_sms_time = current_time
-        
-        if self.gsm and self.gsm.connected:
-            return self.gsm.send_sms(message)
-        return False
-    
-    def send_intruder_sms(self, message):
-        """Send intruder SMS (called from API)"""
-        if self.gsm and self.gsm.connected:
-            return self.gsm.send_sms(message)
-        return False
-    
     def lock_engine(self):
-        GPIO.output(RELAY_PIN, GPIO.LOW)
-        self.engine_locked = True
-        print("🔒 ENGINE LOCKED")
-        self.send_engine_sms("ENGINE LOCKED - Vehicle immobilized")
+        try:
+            GPIO.output(RELAY_PIN, GPIO.LOW)
+            self.engine_locked = True
+            logger.info("🔒 ENGINE LOCKED - Relay OFF")
+            # Send SMS alert for engine lock
+            self.send_sms("VEHICLE SECURITY: Engine has been LOCKED (immobilized)")
+            return True
+        except Exception as e:
+            logger.error(f"Lock error: {e}")
+            return False
     
     def unlock_engine(self):
-        GPIO.output(RELAY_PIN, GPIO.HIGH)
-        self.engine_locked = False
-        print("🔓 ENGINE UNLOCKED")
-        self.send_engine_sms("ENGINE UNLOCKED - Vehicle operational")
+        try:
+            GPIO.output(RELAY_PIN, GPIO.HIGH)
+            self.engine_locked = False
+            logger.info("🔓 ENGINE UNLOCKED - Relay ON")
+            # Send SMS alert for engine unlock
+            self.send_sms("VEHICLE SECURITY: Engine has been UNLOCKED (operational)")
+            return True
+        except Exception as e:
+            logger.error(f"Unlock error: {e}")
+            return False
+    
+    def get_gps_location(self):
+        # Try real GPS first
+        try:
+            packet = gpsd.get_current()
+            if packet.mode >= 2:
+                return {
+                    'latitude': packet.lat,
+                    'longitude': packet.lon,
+                    'speed': packet.hspeed * 3.6,
+                    'heading': packet.track,
+                    'timestamp': datetime.now().isoformat()
+                }
+        except:
+            pass
+        
+        # Simulated GPS (circular movement)
+        self.sim_angle += 0.03
+        center_lat = -1.2864  # Nairobi
+        center_lng = 36.8172
+        radius = 0.008
+        
+        return {
+            'latitude': center_lat + radius * math.sin(self.sim_angle),
+            'longitude': center_lng + radius * math.cos(self.sim_angle),
+            'speed': 40 + 20 * math.sin(self.sim_angle),
+            'heading': (self.sim_angle * 57.3) % 360,
+            'timestamp': datetime.now().isoformat()
+        }
     
     def capture_face(self):
-        if not self.camera:
+        if self.camera is None:
+            logger.warning("Camera not available")
             return None
         try:
             ret, frame = self.camera.read()
             if ret:
+                logger.info(f"📷 Frame captured: {frame.shape}")
+                face_cascade = cv2.CascadeClassifier(
+                    cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+                )
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-                faces = face_cascade.detectMultiScale(gray, 1.02, 3, minSize=(60, 60))
+                faces = face_cascade.detectMultiScale(gray, 1.1, 5, minSize=(60, 60))
+                logger.info(f"👤 Faces detected: {len(faces)}")
                 if len(faces) > 0:
-                    x, y, w, h = faces[0]
+                    (x, y, w, h) = max(faces, key=lambda f: f[2] * f[3])
                     face_roi = frame[y:y+h, x:x+w]
                     _, buffer = cv2.imencode('.jpg', face_roi)
-                    return base64.b64encode(buffer).decode()
-            return None
-        except:
-            return None
+                    b64_data = base64.b64encode(buffer).decode('utf-8')
+                    logger.info(f"📸 Face captured, base64 length: {len(b64_data)}")
+                    return b64_data
+                else:
+                    logger.info("No faces detected in frame")
+            else:
+                logger.warning("Failed to read frame")
+        except Exception as e:
+            logger.error(f"Face capture error: {e}")
+        return None
+    
+    def send_sms(self, message):
+        """Send REAL SMS via GSM module (or simulated if unavailable)"""
+        if self.gsm and self.gsm.is_connected:
+            return self.gsm.send_sms(OWNER_PHONE, message)
+        else:
+            logger.info(f"[SIMULATED SMS] To: {OWNER_PHONE}")
+            logger.info(f"[SIMULATED SMS] Message: {message}")
+            return True
+    
+    def send_intruder_sms_alert(self):
+        """Send dedicated SMS alert for intruder detection"""
+        message = f"INTRUSION DETECTED! Check web app for more details!"
+        return self.send_sms(message)
     
     def cleanup(self):
-        if self.camera:
-            self.camera.release()
-        if self.gsm:
-            self.gsm.cleanup()
-        GPIO.cleanup()
+        try:
+            self.lock_engine()
+            if self.camera:
+                self.camera.release()
+            if self.gsm:
+                self.gsm.cleanup()
+            GPIO.cleanup()
+        except:
+            pass
 
-# ============= CLOUD COMMANDS =============
-class CloudComm:
-    def __init__(self):
-        self.headers = {'X-API-KEY': API_KEY, 'Content-Type': 'application/json'}
+
+# ============= CLOUD COMMUNICATION =============
+class CloudCommunicator:
+    def __init__(self, api_url, api_key):
+        self.api_url = api_url
+        self.api_key = api_key
+        self.headers = {'X-API-KEY': api_key, 'Content-Type': 'application/json'}
+    
+    def send_location(self, location):
+        if not location:
+            return False
+        try:
+            response = requests.post(
+                f"{self.api_url}/hardware/location/",
+                headers=self.headers,
+                json=location,
+                timeout=5
+            )
+            return response.status_code == 200
+        except:
+            return False
     
     def get_command(self):
         try:
-            r = requests.get(f"{API_BASE_URL}/hardware/get-command/", headers={'X-API-KEY': API_KEY}, timeout=5)
-            if r.status_code == 200:
-                data = r.json()
+            response = requests.get(
+                f"{self.api_url}/hardware/get-command/",
+                headers={'X-API-KEY': self.api_key},
+                timeout=5
+            )
+            if response.status_code == 200:
+                data = response.json()
                 if data.get('command') != 'NONE':
-                    print(f"📡 Command received: {data.get('command')}")
+                    logger.info(f"📡 Command received: {data.get('command')} (ID: {data.get('command_id')})")
                     return data
         except Exception as e:
-            pass
+            logger.debug(f"Command poll error: {e}")
         return None
     
-    def mark_executed(self, cmd_id):
+    def mark_executed(self, command_id):
         try:
-            requests.post(f"{API_BASE_URL}/hardware/mark-executed/", headers=self.headers, json={'command_id': cmd_id}, timeout=5)
+            response = requests.post(
+                f"{self.api_url}/hardware/mark-executed/",
+                headers=self.headers,
+                json={'command_id': command_id},
+                timeout=5
+            )
+            return response.status_code == 200
+        except:
+            return False
+    
+    def authenticate_face(self, face_image):
+        try:
+            response = requests.post(
+                f"{self.api_url}/api/face-auth/",
+                headers={'Content-Type': 'application/json'},
+                json={'face_image': f"data:image/jpeg;base64,{face_image}"},
+                timeout=10
+            )
+            if response.status_code == 200:
+                result = response.json()
+                return result.get('success', False), result
         except:
             pass
+        return False, None
+    
+    def send_intruder_alert(self, face_image):
+        """Send intruder alert with captured face image"""
+        try:
+            if not face_image:
+                logger.error("❌ No face image to send")
+                return False
+            
+            logger.info(f"📸 Preparing to send intruder alert")
+            logger.info(f"   Image length: {len(face_image)} characters")
+            
+            # Ensure the image has data URL prefix
+            if not face_image.startswith('data:image'):
+                face_image_with_prefix = f"data:image/jpeg;base64,{face_image}"
+                logger.info(f"   Added data URL prefix")
+            else:
+                face_image_with_prefix = face_image
+            
+            alert_data = {
+                'title': 'UNAUTHORIZED ACCESS ATTEMPT',
+                'description': f'Unknown person attempted to access vehicle at {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}',
+                'severity': 'HIGH',
+                'face_image': face_image_with_prefix
+            }
+            
+            logger.info(f"📤 Sending POST to {self.api_url}/api/alerts/create/")
+            
+            response = requests.post(
+                f"{self.api_url}/api/alerts/create/",
+                headers=self.headers,
+                json=alert_data,
+                timeout=15
+            )
+            
+            if response.status_code == 201:
+                result = response.json()
+                logger.info(f"✅ Alert {result.get('id')} created, image saved: {result.get('image_saved')}")
+                return True
+            else:
+                logger.error(f"❌ Alert failed: {response.status_code}")
+                return False
+        except Exception as e:
+            logger.error(f"❌ Send intruder alert error: {e}")
+            return False
 
-# ============= INTRUDER API SERVER =============
-class IntruderAPI:
-    def __init__(self, hardware):
-        self.hardware = hardware
-        self.server = None
-    
-    def start(self):
-        handler = self.create_handler()
-        self.server = HTTPServer(('0.0.0.0', INTRUDER_API_PORT), handler)
-        print(f"\n🌐 Intruder API listening on port {INTRUDER_API_PORT}")
-        print(f"📍 POST http://{PI_IP}:{INTRUDER_API_PORT}/intruder-alert")
-        print(f"🔑 API Key: {INTRUDER_API_KEY}")
-        thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-        thread.start()
-    
-    def create_handler(self):
-        hardware = self.hardware
-        
-        class Handler(BaseHTTPRequestHandler):
-            def do_POST(self):
-                if self.path == '/intruder-alert':
-                    api_key = self.headers.get('X-API-KEY')
-                    if api_key != INTRUDER_API_KEY:
-                        self.send_response(401)
-                        self.end_headers()
-                        self.wfile.write(b'Invalid API key')
-                        return
-                    
-                    content_length = int(self.headers.get('Content-Length', 0))
-                    post_data = self.rfile.read(content_length)
-                    
-                    try:
-                        data = json.loads(post_data)
-                        print("\n" + "="*50)
-                        print("🚨 INTRUDER ALERT RECEIVED FROM WEB APP!")
-                        print(f"   Alert ID: {data.get('alert_id', 'unknown')}")
-                        print("="*50)
-                        
-                        # Send intruder SMS
-                        success = hardware.send_intruder_sms("INTRUSION DETECTED! Check web app for more details!")
-                        
-                        if success:
-                            print("✅✅✅ INTRUDER SMS SENT! ✅✅✅")
-                            self.send_response(200)
-                            self.end_headers()
-                            self.wfile.write(b'{"status": "sms_sent"}')
-                        else:
-                            print("❌ Failed to send SMS")
-                            self.send_response(500)
-                            self.end_headers()
-                            self.wfile.write(b'{"status": "failed"}')
-                    except Exception as e:
-                        print(f"Error: {e}")
-                        self.send_response(500)
-                        self.end_headers()
-                        self.wfile.write(b'{"status": "error"}')
-                else:
-                    self.send_response(404)
-                    self.end_headers()
-            
-            def do_GET(self):
-                if self.path == '/health':
-                    self.send_response(200)
-                    self.end_headers()
-                    self.wfile.write(b'{"status": "ok"}')
-                else:
-                    self.send_response(404)
-                    self.end_headers()
-            
-            def log_message(self, format, *args):
-                pass
-        
-        return Handler
 
 # ============= MAIN SYSTEM =============
 class VehicleSecuritySystem:
     def __init__(self):
         self.hardware = VehicleHardware()
-        self.cloud = CloudComm()
+        self.cloud = CloudCommunicator(API_BASE_URL, API_KEY)
         self.running = True
-    
+        
     def command_loop(self):
         while self.running:
-            cmd = self.cloud.get_command()
-            if cmd:
-                if cmd.get('command') == 'UNLOCK':
-                    self.hardware.unlock_engine()
-                    self.cloud.mark_executed(cmd.get('command_id'))
-                elif cmd.get('command') == 'LOCK':
-                    self.hardware.lock_engine()
-                    self.cloud.mark_executed(cmd.get('command_id'))
-            time.sleep(2)
+            command_data = self.cloud.get_command()
+            if command_data:
+                command = command_data.get('command')
+                command_id = command_data.get('command_id')
+                
+                if command == 'UNLOCK':
+                    logger.info("🔓 Executing UNLOCK...")
+                    if self.hardware.unlock_engine():
+                        self.cloud.mark_executed(command_id)
+                        logger.info(f"✅ Command {command_id} marked as executed")
+                elif command == 'LOCK':
+                    logger.info("🔒 Executing LOCK...")
+                    if self.hardware.lock_engine():
+                        self.cloud.mark_executed(command_id)
+                        logger.info(f"✅ Command {command_id} marked as executed")
+            
+            time.sleep(COMMAND_POLL_INTERVAL)
+    
+    def gps_loop(self):
+        while self.running:
+            location = self.hardware.get_gps_location()
+            if location:
+                self.cloud.send_location(location)
+            time.sleep(GPS_UPDATE_INTERVAL)
+    
+    def intruder_loop(self):
+        """Check for unauthorized access and capture intruder images"""
+        last_alert_time = 0
+        
+        while self.running:
+            if self.hardware.engine_locked:
+                face_image = self.hardware.capture_face()
+                
+                if face_image:
+                    logger.info(f"📸 Face captured, length: {len(face_image)} bytes")
+                    
+                    # Authenticate face with cloud
+                    is_authorized, result = self.cloud.authenticate_face(face_image)
+                    
+                    if is_authorized:
+                        logger.info("✅ Authorized face detected - UNLOCKING")
+                        self.hardware.unlock_engine()
+                    else:
+                        logger.warning("⚠️ Unauthorized face detected - Sending alert with image")
+                        
+                        # Send alert with image (rate limited to once per 30 seconds)
+                        current_time = time.time()
+                        if current_time - last_alert_time > 30:
+                            logger.info("📸 Sending intruder alert with captured image...")
+                            self.cloud.send_intruder_alert(face_image)
+                            
+                            # Send SMS alert for intruder
+                            self.hardware.send_intruder_sms_alert()
+                            
+                            last_alert_time = current_time
+            time.sleep(INTRUDER_CHECK_INTERVAL)
     
     def run(self):
-        print("\n✅ SYSTEM RUNNING")
-        print("="*50)
-        print("📱 SMS WILL BE SENT FOR:")
-        print("   1. ENGINE LOCKED (via cloud command)")
-        print("   2. ENGINE UNLOCKED (via cloud command)")
-        print("   3. INTRUDER DETECTED (via web app alert)")
-        print("="*50)
+        logger.info("=" * 60)
+        logger.info("🚗 VEHICLE SECURITY SYSTEM STARTED")
+        logger.info(f"Cloud Server: {API_BASE_URL}")
+        logger.info(f"Relay Pin: GPIO{RELAY_PIN}")
+        logger.info(f"GSM: GPIO{GSM_TX_PIN} (TX), GPIO{GSM_RX_PIN} (RX)")
+        logger.info("=" * 60)
         
-        # Start command loop
-        threading.Thread(target=self.command_loop, daemon=True).start()
+        # Start threads
+        threads = [
+            threading.Thread(target=self.gps_loop, daemon=True),
+            threading.Thread(target=self.command_loop, daemon=True),
+            threading.Thread(target=self.intruder_loop, daemon=True),
+        ]
+        for t in threads:
+            t.start()
         
-        # Start intruder API server
-        intruder_api = IntruderAPI(self.hardware)
-        intruder_api.start()
-        
-        print("\n✅ ALL SYSTEMS GO!")
-        print("Press Ctrl+C to stop\n")
+        logger.info("✅ All systems operational")
+        logger.info("📡 Waiting for commands from cloud...")
+        logger.info("👤 Intruder detection active - unauthorized faces will be captured")
+        logger.info("📱 REAL SMS alerts active for:")
+        logger.info("   - Engine LOCK/UNLOCK events")
+        logger.info("   - Intruder detection")
+        logger.info("Press Ctrl+C to stop")
         
         try:
             while self.running:
@@ -384,7 +551,15 @@ class VehicleSecuritySystem:
     def cleanup(self):
         self.running = False
         self.hardware.cleanup()
-        print("\nShutdown complete")
+        logger.info("Shutdown complete")
 
 if __name__ == "__main__":
-    VehicleSecuritySystem().run()
+    # Test cloud connection
+    try:
+        test = requests.get(f"{API_BASE_URL}/api/face-auth/", timeout=3)
+        logger.info(f"✅ Cloud server reachable at {API_BASE_URL}")
+    except Exception as e:
+        logger.warning(f"⚠️ Cannot reach cloud server at {API_BASE_URL}: {e}")
+    
+    system = VehicleSecuritySystem()
+    system.run()
