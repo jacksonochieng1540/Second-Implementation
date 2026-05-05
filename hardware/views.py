@@ -52,7 +52,6 @@ def mark_executed(request):
             description=f"Command {command.command} executed by hardware"
         )
         
-        # Broadcast via WebSocket
         channel_layer = get_channel_layer()
         async_to_sync(channel_layer.group_send)(
             'vehicle_tracking',
@@ -92,15 +91,15 @@ def send_location(request):
         heading=heading
     )
     
-    # Log event periodically (not every update to avoid spam)
+
     import random
-    if random.random() < 0.1:  # 10% of updates
+    if random.random() < 0.1:  
         EventLog.objects.create(
             event_type='LOCATION_UPDATE',
             description=f"Vehicle location updated: {latitude}, {longitude}"
         )
     
-    # Broadcast via WebSocket
+    
     channel_layer = get_channel_layer()
     async_to_sync(channel_layer.group_send)(
         'vehicle_tracking',
