@@ -15,7 +15,7 @@ from django.views.decorators.csrf import csrf_exempt
 import base64
 from django.core.files.base import ContentFile
 import os
-import requests  # ADDED for sending to Raspberry Pi
+import requests
 
 # Import the working face recognizer
 from authentication.face_recognizer import face_recognizer
@@ -58,6 +58,21 @@ def send_command(request):
         description=f"User {user.username} sent {command} command"
     )
     
+    # ========== SEND TO RASPBERRY PI ==========
+    try:
+        response = requests.post(
+            f"{PI_API_URL}/command",
+            headers={'X-API-KEY': PI_API_KEY, 'Content-Type': 'application/json'},
+            json={'command': command},
+            timeout=2
+        )
+        if response.status_code == 200:
+            print(f"✅ {command} command sent to Raspberry Pi")
+        else:
+            print(f"⚠️ Pi responded: {response.status_code}")
+    except Exception as e:
+        print(f"⚠️ Could not send to Pi: {e}")
+    
     # Broadcast via WebSocket for real-time dashboard update
     channel_layer = get_channel_layer()
     async_to_sync(channel_layer.group_send)(
@@ -83,7 +98,7 @@ def send_command(request):
 @permission_classes([AllowAny])
 @csrf_exempt
 def face_auth(request):
-    """Face authentication - sends intruder alert to Raspberry Pi for SMS"""
+    """Face authentication - sends UNLOCK to Pi when authorized, INTRUDER alert when not"""
     from authentication.face_recognizer import face_recognizer
     from .models import VehicleCommand, EventLog
     from alerts.models import Alert
@@ -126,6 +141,24 @@ def face_auth(request):
             print(f"\n✅✅✅ AUTHENTICATED: {username} ({confidence:.1f}% confidence) ✅✅✅")
             print(f"UNLOCK command #{command.id} created")
             
+            # ========== SEND UNLOCK TO RASPBERRY PI ==========
+            pi_unlock_sent = False
+            try:
+                print(f"\n📡 Sending UNLOCK command to Raspberry Pi at {PI_API_URL}...")
+                response = requests.post(
+                    f"{PI_API_URL}/command",
+                    headers={'X-API-KEY': PI_API_KEY, 'Content-Type': 'application/json'},
+                    json={'command': 'UNLOCK'},
+                    timeout=2
+                )
+                if response.status_code == 200:
+                    pi_unlock_sent = True
+                    print("✅✅✅ UNLOCK command sent to Pi - Relay should click! ✅✅✅")
+                else:
+                    print(f"⚠️ Pi responded: {response.status_code}")
+            except Exception as e:
+                print(f"⚠️ Could not send UNLOCK to Pi: {e}")
+            
             # Broadcast via WebSocket
             channel_layer = get_channel_layer()
             async_to_sync(channel_layer.group_send)(
@@ -145,7 +178,8 @@ def face_auth(request):
                 'success': True,
                 'message': f'Welcome {username}! Engine unlocking...',
                 'user': username,
-                'confidence': confidence
+                'confidence': confidence,
+                'pi_command_sent': pi_unlock_sent
             }, status=200)
             
         except Exception as e:
@@ -206,8 +240,7 @@ def face_auth(request):
             
     except requests.exceptions.ConnectionError:
         print(f"❌ Cannot connect to Raspberry Pi at {PI_API_URL}")
-        print("   Make sure pi_working.py is running on Raspberry Pi")
-        print("   Check: ssh pi@10.251.159.168 and run python3 pi_working.py")
+        print("   Make sure pi_final_working.py is running on Raspberry Pi")
     except Exception as e:
         print(f"❌ Error sending to Raspberry Pi: {e}")
     

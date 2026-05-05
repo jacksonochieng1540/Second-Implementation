@@ -61,8 +61,11 @@ class GSMSoftwareSerial:
         """Connect to pigpio daemon and initialize software serial"""
         try:
             # Start pigpio daemon if not running
-            subprocess.run(['sudo', 'pigpiod'], stderr=subprocess.DEVNULL)
+            subprocess.run(['sudo', 'killall', 'pigpiod'], stderr=subprocess.DEVNULL)
             time.sleep(1)
+            
+            subprocess.run(['sudo', 'pigpiod'], stderr=subprocess.DEVNULL)
+            time.sleep(2)
             
             self.pi = pigpio.pi()
             if not self.pi.connected:
@@ -75,14 +78,18 @@ class GSMSoftwareSerial:
             self.pi.bb_serial_read_open(self.rx_pin, self.baud, 8)
             
             # Test GSM module
-            if self.send_command("AT\r", timeout=1):
-                if b'OK' in self.send_command("AT\r", timeout=1):
-                    self.is_connected = True
-                    logger.info(f"✅ REAL GSM connected (TX=GPIO{self.tx_pin}, RX=GPIO{self.rx_pin})")
-                    
-                    # Set SMS text mode
-                    self.send_command("AT+CMGF=1\r", timeout=1)
-                    return True
+            response = self.send_command("AT\r")
+            
+            if b'OK' in response:
+                self.is_connected = True
+                logger.info(f"✅ REAL GSM connected (TX=GPIO{self.tx_pin}, RX=GPIO{self.rx_pin})")
+                
+                # Set SMS text mode
+                self.send_command("AT+CMGF=1\r")
+                time.sleep(0.5)
+                
+                logger.info("✅ GSM ready for SMS")
+                return True
             
             self.is_connected = False
             logger.warning("⚠️ GSM not responding - SMS will be simulated")
@@ -126,10 +133,13 @@ class GSMSoftwareSerial:
         if not self.pi:
             return b''
         
+        # Clear buffer
+        self.pi.bb_serial_read(self.rx_pin)
+        
         # Send command
         for byte in cmd.encode():
             self.send_byte(byte)
-        time.sleep(0.3)
+        time.sleep(0.5)
         
         # Read response
         count, data = self.pi.bb_serial_read(self.rx_pin)
@@ -143,8 +153,11 @@ class GSMSoftwareSerial:
             return True
         
         try:
+            logger.info(f"📱 Sending REAL SMS to {phone_number}...")
+            
             # Set SMS text mode
-            self.send_command("AT+CMGF=1\r", timeout=1)
+            self.send_command("AT+CMGF=1\r")
+            time.sleep(0.5)
             
             # Send SMS command with phone number
             cmd = f'AT+CMGS="{phone_number}"\r'
@@ -153,22 +166,22 @@ class GSMSoftwareSerial:
             time.sleep(1)
             
             # Send message content
-            for byte in message.encode():
+            for byte in message.encode('utf-8'):
                 self.send_byte(byte)
             
             # Send Ctrl+Z (0x1A) to indicate end of message
             self.send_byte(26)
-            time.sleep(3)
+            time.sleep(4)
             
             # Read response
             count, data = self.pi.bb_serial_read(self.rx_pin)
             
-            if b'+CMGS' in data:
-                logger.info(f"✅ REAL SMS sent to {phone_number}")
-                logger.info(f"   Message: {message[:50]}...")
+            if b'+CMGS' in data or b'OK' in data:
+                logger.info(f"✅✅✅ REAL SMS SENT SUCCESSFULLY! ✅✅✅")
+                logger.info(f"   Message: {message}")
                 return True
             else:
-                logger.warning(f"⚠️ SMS may not have sent: {data[:50]}")
+                logger.warning(f"⚠️ SMS may not have sent. Response: {data[:100]}")
                 return False
                 
         except Exception as e:
@@ -239,8 +252,8 @@ class VehicleHardware:
             GPIO.output(RELAY_PIN, GPIO.LOW)
             self.engine_locked = True
             logger.info("🔒 ENGINE LOCKED - Relay OFF")
-            # Send SMS alert for engine lock
-            self.send_sms("VEHICLE SECURITY: Engine has been LOCKED (immobilized)")
+            # SMS #1: Engine LOCKED (already working)
+            self.send_sms("ENGINE LOCKED - Vehicle immobilized")
             return True
         except Exception as e:
             logger.error(f"Lock error: {e}")
@@ -251,8 +264,8 @@ class VehicleHardware:
             GPIO.output(RELAY_PIN, GPIO.HIGH)
             self.engine_locked = False
             logger.info("🔓 ENGINE UNLOCKED - Relay ON")
-            # Send SMS alert for engine unlock
-            self.send_sms("VEHICLE SECURITY: Engine has been UNLOCKED (operational)")
+            # SMS #2: Engine UNLOCKED (ADD THIS)
+            self.send_sms("ENGINE UNLOCKED - Vehicle operational")
             return True
         except Exception as e:
             logger.error(f"Unlock error: {e}")
@@ -326,8 +339,9 @@ class VehicleHardware:
             return True
     
     def send_intruder_sms_alert(self):
-        """Send dedicated SMS alert for intruder detection"""
-        message = f"INTRUSION DETECTED! Check web app for more details!"
+        """SMS #3: Send intruder SMS alert"""
+        message = "INTRUSION DETECTED! Check web app for more details!"
+        logger.info(f"🚨🚨🚨 SENDING INTRUDER SMS: {message} 🚨🚨🚨")
         return self.send_sms(message)
     
     def cleanup(self):
@@ -402,8 +416,13 @@ class CloudCommunicator:
             if response.status_code == 200:
                 result = response.json()
                 return result.get('success', False), result
-        except:
-            pass
+            else:
+                # If unauthorized (401), still return False to trigger SMS
+                if response.status_code == 401:
+                    logger.info("Face not authorized by server")
+                    return False, None
+        except Exception as e:
+            logger.error(f"Face auth error: {e}")
         return False, None
     
     def send_intruder_alert(self, face_image):
@@ -414,12 +433,10 @@ class CloudCommunicator:
                 return False
             
             logger.info(f"📸 Preparing to send intruder alert")
-            logger.info(f"   Image length: {len(face_image)} characters")
             
             # Ensure the image has data URL prefix
             if not face_image.startswith('data:image'):
                 face_image_with_prefix = f"data:image/jpeg;base64,{face_image}"
-                logger.info(f"   Added data URL prefix")
             else:
                 face_image_with_prefix = face_image
             
@@ -441,7 +458,7 @@ class CloudCommunicator:
             
             if response.status_code == 201:
                 result = response.json()
-                logger.info(f"✅ Alert {result.get('id')} created, image saved: {result.get('image_saved')}")
+                logger.info(f"✅ Alert {result.get('id')} created")
                 return True
             else:
                 logger.error(f"❌ Alert failed: {response.status_code}")
@@ -467,12 +484,12 @@ class VehicleSecuritySystem:
                 
                 if command == 'UNLOCK':
                     logger.info("🔓 Executing UNLOCK...")
-                    if self.hardware.unlock_engine():
+                    if self.hardware.unlock_engine():  # This will send UNLOCK SMS
                         self.cloud.mark_executed(command_id)
                         logger.info(f"✅ Command {command_id} marked as executed")
                 elif command == 'LOCK':
                     logger.info("🔒 Executing LOCK...")
-                    if self.hardware.lock_engine():
+                    if self.hardware.lock_engine():  # This will send LOCK SMS
                         self.cloud.mark_executed(command_id)
                         logger.info(f"✅ Command {command_id} marked as executed")
             
@@ -486,35 +503,37 @@ class VehicleSecuritySystem:
             time.sleep(GPS_UPDATE_INTERVAL)
     
     def intruder_loop(self):
-        """Check for unauthorized access and capture intruder images"""
+        """Check for unauthorized access and send intruder SMS"""
         last_alert_time = 0
         
         while self.running:
-            if self.hardware.engine_locked:
-                face_image = self.hardware.capture_face()
+            # Always check for intruders regardless of engine state
+            face_image = self.hardware.capture_face()
+            
+            if face_image:
+                logger.info(f"📸 Face captured, length: {len(face_image)} bytes")
                 
-                if face_image:
-                    logger.info(f"📸 Face captured, length: {len(face_image)} bytes")
+                # Authenticate face with cloud
+                is_authorized, result = self.cloud.authenticate_face(face_image)
+                
+                if is_authorized:
+                    logger.info("✅ Authorized face detected")
+                    if self.hardware.engine_locked:
+                        logger.info("🔓 Authorized user - UNLOCKING engine")
+                        self.hardware.unlock_engine()  # This will send UNLOCK SMS
+                else:
+                    logger.warning("⚠️ Unauthorized face detected - Sending alert")
                     
-                    # Authenticate face with cloud
-                    is_authorized, result = self.cloud.authenticate_face(face_image)
-                    
-                    if is_authorized:
-                        logger.info("✅ Authorized face detected - UNLOCKING")
-                        self.hardware.unlock_engine()
-                    else:
-                        logger.warning("⚠️ Unauthorized face detected - Sending alert with image")
+                    # Send alert with image and SMS (rate limited to once per 30 seconds)
+                    current_time = time.time()
+                    if current_time - last_alert_time > 30:
+                        logger.info("📸 Sending intruder alert with captured image...")
+                        self.cloud.send_intruder_alert(face_image)
                         
-                        # Send alert with image (rate limited to once per 30 seconds)
-                        current_time = time.time()
-                        if current_time - last_alert_time > 30:
-                            logger.info("📸 Sending intruder alert with captured image...")
-                            self.cloud.send_intruder_alert(face_image)
-                            
-                            # Send SMS alert for intruder
-                            self.hardware.send_intruder_sms_alert()
-                            
-                            last_alert_time = current_time
+                        # SMS #3: Send intruder SMS
+                        self.hardware.send_intruder_sms_alert()
+                        
+                        last_alert_time = current_time
             time.sleep(INTRUDER_CHECK_INTERVAL)
     
     def run(self):
@@ -538,8 +557,9 @@ class VehicleSecuritySystem:
         logger.info("📡 Waiting for commands from cloud...")
         logger.info("👤 Intruder detection active - unauthorized faces will be captured")
         logger.info("📱 REAL SMS alerts active for:")
-        logger.info("   - Engine LOCK/UNLOCK events")
-        logger.info("   - Intruder detection")
+        logger.info("   - SMS #1: ENGINE LOCKED (immobilized)")
+        logger.info("   - SMS #2: ENGINE UNLOCKED (operational)")
+        logger.info("   - SMS #3: INTRUSION DETECTED (unauthorized face)")
         logger.info("Press Ctrl+C to stop")
         
         try:
