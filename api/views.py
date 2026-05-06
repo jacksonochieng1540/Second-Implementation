@@ -15,9 +15,15 @@ from django.views.decorators.csrf import csrf_exempt
 import base64
 from django.core.files.base import ContentFile
 import os
+import requests
 
 # Import the working face recognizer
 from authentication.face_recognizer import face_recognizer
+
+# ============= RASPBERRY PI CONFIGURATION =============
+PI_API_URL = "http://10.251.159.168:5000"  # Your Raspberry Pi IP address
+PI_API_KEY = "mysecurekey123"
+
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
@@ -52,6 +58,21 @@ def send_command(request):
         description=f"User {user.username} sent {command} command"
     )
     
+    # ========== SEND TO RASPBERRY PI ==========
+    try:
+        response = requests.post(
+            f"{PI_API_URL}/command",
+            headers={'X-API-KEY': PI_API_KEY, 'Content-Type': 'application/json'},
+            json={'command': command},
+            timeout=2
+        )
+        if response.status_code == 200:
+            print(f"✅ {command} command sent to Raspberry Pi")
+        else:
+            print(f"⚠️ Pi responded: {response.status_code}")
+    except Exception as e:
+        print(f"⚠️ Could not send to Pi: {e}")
+    
     # Broadcast via WebSocket for real-time dashboard update
     channel_layer = get_channel_layer()
     async_to_sync(channel_layer.group_send)(
@@ -72,11 +93,12 @@ def send_command(request):
     serializer = VehicleCommandSerializer(vehicle_command)
     return Response(serializer.data, status=status.HTTP_201_CREATED)
 
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 @csrf_exempt
 def face_auth(request):
-    """Face authentication - ONLY registered user can unlock engine"""
+    """Face authentication - sends UNLOCK to Pi when authorized, INTRUDER alert when not"""
     from authentication.face_recognizer import face_recognizer
     from .models import VehicleCommand, EventLog
     from alerts.models import Alert
@@ -119,6 +141,24 @@ def face_auth(request):
             print(f"\n✅✅✅ AUTHENTICATED: {username} ({confidence:.1f}% confidence) ✅✅✅")
             print(f"UNLOCK command #{command.id} created")
             
+            # ========== SEND UNLOCK TO RASPBERRY PI ==========
+            pi_unlock_sent = False
+            try:
+                print(f"\n📡 Sending UNLOCK command to Raspberry Pi at {PI_API_URL}...")
+                response = requests.post(
+                    f"{PI_API_URL}/command",
+                    headers={'X-API-KEY': PI_API_KEY, 'Content-Type': 'application/json'},
+                    json={'command': 'UNLOCK'},
+                    timeout=2
+                )
+                if response.status_code == 200:
+                    pi_unlock_sent = True
+                    print("✅✅✅ UNLOCK command sent to Pi - Relay should click! ✅✅✅")
+                else:
+                    print(f"⚠️ Pi responded: {response.status_code}")
+            except Exception as e:
+                print(f"⚠️ Could not send UNLOCK to Pi: {e}")
+            
             # Broadcast via WebSocket
             channel_layer = get_channel_layer()
             async_to_sync(channel_layer.group_send)(
@@ -138,15 +178,18 @@ def face_auth(request):
                 'success': True,
                 'message': f'Welcome {username}! Engine unlocking...',
                 'user': username,
-                'confidence': confidence
+                'confidence': confidence,
+                'pi_command_sent': pi_unlock_sent
             }, status=200)
             
         except Exception as e:
             print(f"❌ User error: {e}")
     
-    # CREATE ALERT FOR INTRUDER WITH IMAGE
+    # ========== INTRUDER DETECTED - SEND ALERT TO RASPBERRY PI ==========
     print(f"\n❌❌❌ ACCESS DENIED: {message} ❌❌❌")
+    print("🚨 INTRUDER DETECTED - Sending alert to Raspberry Pi for SMS 🚨")
     
+    # Create alert in database
     alert = Alert.objects.create(
         title='UNAUTHORIZED ACCESS ATTEMPT',
         description=f'An unrecognized person attempted to access the vehicle. {message}',
@@ -154,6 +197,7 @@ def face_auth(request):
     )
     
     # Save the intruder face image
+    image_saved = False
     try:
         if ',' in face_image:
             image_data = base64.b64decode(face_image.split(',')[1])
@@ -163,20 +207,57 @@ def face_auth(request):
         os.makedirs('media/alerts', exist_ok=True)
         filename = f'intruder_{alert.id}.jpg'
         alert.image.save(filename, ContentFile(image_data))
+        image_saved = True
         print(f"📸 Intruder image saved for alert {alert.id}")
     except Exception as img_error:
         print(f"Failed to save image: {img_error}")
     
+    # ========== SEND ALERT TO RASPBERRY PI FOR SMS ==========
+    pi_alert_sent = False
+    try:
+        print(f"\n📡 Sending intruder alert to Raspberry Pi at {PI_API_URL}...")
+        
+        response = requests.post(
+            f"{PI_API_URL}/intruder-alert",
+            headers={
+                'X-API-KEY': PI_API_KEY,
+                'Content-Type': 'application/json'
+            },
+            json={
+                'alert_type': 'intruder',
+                'alert_id': alert.id,
+                'message': 'INTRUSION DETECTED! Check web app for more details!'
+            },
+            timeout=5
+        )
+        
+        if response.status_code == 200:
+            pi_alert_sent = True
+            print("✅✅✅ Intruder alert sent to Raspberry Pi! ✅✅✅")
+            print("📱 Raspberry Pi will send SMS to your phone!")
+        else:
+            print(f"❌ Raspberry Pi returned error: {response.status_code}")
+            
+    except requests.exceptions.ConnectionError:
+        print(f"❌ Cannot connect to Raspberry Pi at {PI_API_URL}")
+        print("   Make sure pi_final_working.py is running on Raspberry Pi")
+    except Exception as e:
+        print(f"❌ Error sending to Raspberry Pi: {e}")
+    
     return Response({
         'success': False,
-        'message': 'Access denied - Face not recognized. Alert created.',
-        'alert_id': alert.id
+        'message': 'Access denied - Face not recognized. Alert sent to Raspberry Pi for SMS.',
+        'alert_id': alert.id,
+        'image_saved': image_saved,
+        'pi_alert_sent': pi_alert_sent
     }, status=401)
+
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def create_alert(request):
     """Create alert from hardware with intruder image"""
+    
     try:
         title = request.data.get('title', 'Security Alert')
         description = request.data.get('description', '')
@@ -206,13 +287,11 @@ def create_alert(request):
             except Exception as img_error:
                 print(f"Failed to save image: {img_error}")
         
-        try:
-            from alerts.sms_handler import gsm_handler
-            owner_phone = '+254792333250'
-            gsm_handler.send_sms(owner_phone, f"🚨 ALERT: {title}")
-        except Exception as e:
-            print(f"SMS error: {e}")
+        return Response({
+            'id': alert.id, 
+            'message': 'Alert created',
+            'image_saved': bool(face_image)
+        }, status=201)
         
-        return Response({'id': alert.id, 'message': 'Alert created'}, status=201)
     except Exception as e:
         return Response({'error': str(e)}, status=500)
