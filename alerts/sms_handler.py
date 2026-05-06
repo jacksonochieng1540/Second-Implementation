@@ -23,13 +23,13 @@ class GSMHandler:
     def connect_gsm(self):
         """Connect to GSM module using pigpio software serial"""
         try:
-            # Check if we're on Raspberry Pi (has GPIO)
+            
             if not os.path.exists('/dev/gpiomem'):
                 logger.warning("Not running on Raspberry Pi - using simulated SMS")
                 self.use_simulated = True
                 return False
             
-            # Start pigpio daemon
+            
             subprocess.run(['sudo', 'killall', 'pigpiod'], stderr=subprocess.DEVNULL)
             time.sleep(1)
             subprocess.run(['sudo', 'pigpiod'], stderr=subprocess.DEVNULL)
@@ -41,12 +41,12 @@ class GSMHandler:
                 self.use_simulated = True
                 return False
             
-            # Setup pins
+            
             self.pi.set_mode(self.tx_pin, pigpio.OUTPUT)
             self.pi.set_mode(self.rx_pin, pigpio.INPUT)
             self.pi.bb_serial_read_open(self.rx_pin, self.baud, 8)
             
-            # Test GSM with multiple attempts
+            
             for attempt in range(3):
                 logger.info(f"📱 Testing GSM (attempt {attempt+1}/3)...")
                 response = self.send_command("AT\r")
@@ -56,13 +56,13 @@ class GSMHandler:
                     logger.info(f"✅✅✅ REAL GSM CONNECTED! ✅✅✅")
                     logger.info(f"   TX=GPIO{self.tx_pin}, RX=GPIO{self.rx_pin}")
                     
-                    # Initialize GSM for SMS
+                    
                     self.send_command("AT+CMGF=1\r")
                     time.sleep(0.5)
                     self.send_command("AT+CSCS=\"GSM\"\r")
                     time.sleep(0.5)
                     
-                    # Check signal
+                    
                     response = self.send_command("AT+CSQ\r")
                     logger.info(f"   Signal: {response}")
                     
@@ -85,17 +85,17 @@ class GSMHandler:
         bits = []
         bit_duration = int(1e6 / self.baud)
         
-        # Start bit (low)
+        
         bits.append(pigpio.pulse(0, 1 << self.tx_pin, bit_duration))
         
-        # Data bits (LSB first)
+    
         for i in range(8):
             if (byte >> i) & 1:
                 bits.append(pigpio.pulse(1 << self.tx_pin, 0, bit_duration))
             else:
                 bits.append(pigpio.pulse(0, 1 << self.tx_pin, bit_duration))
         
-        # Stop bit (high)
+        
         bits.append(pigpio.pulse(1 << self.tx_pin, 0, bit_duration))
         
         self.pi.wave_clear()
@@ -111,15 +111,15 @@ class GSMHandler:
         if not self.pi:
             return b''
         
-        # Clear buffer
+    
         self.pi.bb_serial_read(self.rx_pin)
         
-        # Send command
+    
         for byte in cmd.encode():
             self.send_byte(byte)
         time.sleep(0.5)
         
-        # Read response
+    
         count, data = self.pi.bb_serial_read(self.rx_pin)
         return data
     
@@ -136,25 +136,25 @@ class GSMHandler:
         try:
             logger.info(f"📱 Sending REAL SMS to {phone_number}...")
             
-            # Set SMS text mode
+        
             self.send_command("AT+CMGF=1\r")
             time.sleep(0.5)
             
-            # Send SMS command with phone number
+        
             cmd = f'AT+CMGS="{phone_number}"\r'
             for byte in cmd.encode():
                 self.send_byte(byte)
             time.sleep(1)
             
-            # Send message content
+            
             for byte in message.encode('utf-8'):
                 self.send_byte(byte)
             
-            # Send Ctrl+Z (0x1A) to indicate end of message
-            self.send_byte(26)
-            time.sleep(4)  # Wait for SMS to send
             
-            # Read response
+            self.send_byte(26)
+            time.sleep(4)  
+            
+            
             count, data = self.pi.bb_serial_read(self.rx_pin)
             
             if b'+CMGS' in data or b'OK' in data:
@@ -176,10 +176,10 @@ class GSMHandler:
             self.pi.bb_serial_read_close(self.rx_pin)
             self.pi.stop()
 
-# Create global instance
+
 gsm_handler = GSMHandler()
 
-# Print status on import
+
 if not gsm_handler.use_simulated:
     logger.info("📱 GSM Handler: REAL MODE - SMS will be sent to your phone")
 else:

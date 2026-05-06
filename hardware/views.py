@@ -1,9 +1,10 @@
+
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework import status
 from django.conf import settings
-from django.utils import timezone
+from django.utils import timezone   
 from api.models import VehicleCommand, EventLog
 from vehicle_tracking.models import VehicleLocation
 from channels.layers import get_channel_layer
