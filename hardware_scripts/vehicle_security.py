@@ -4,6 +4,7 @@ Complete Vehicle Security System for Raspberry Pi
 Works with web dashboard - Controls relay via GPIO27
 Includes intruder image capture and alert
 REAL GSM SMS using pigpio software serial
+WITH GPS LOCATION IN INTRUDER SMS
 """
 
 import requests
@@ -178,7 +179,7 @@ class GSMSoftwareSerial:
             
             if b'+CMGS' in data or b'OK' in data:
                 logger.info(f"✅✅✅ REAL SMS SENT SUCCESSFULLY! ✅✅✅")
-                logger.info(f"   Message: {message}")
+                logger.info(f"   Message: {message[:80]}...")
                 return True
             else:
                 logger.warning(f"⚠️ SMS may not have sent. Response: {data[:100]}")
@@ -203,6 +204,8 @@ class VehicleHardware:
         self.camera = None
         self.sim_angle = 0  # For simulated GPS
         self.gsm = None
+        self.current_gps_lat = None
+        self.current_gps_lon = None
         
         self.setup_gpio()
         self.setup_gps()
@@ -252,7 +255,7 @@ class VehicleHardware:
             GPIO.output(RELAY_PIN, GPIO.LOW)
             self.engine_locked = True
             logger.info("🔒 ENGINE LOCKED - Relay OFF")
-            # SMS #1: Engine LOCKED (already working)
+            # SMS #1: Engine LOCKED
             self.send_sms("ENGINE LOCKED - Vehicle immobilized")
             return True
         except Exception as e:
@@ -264,7 +267,7 @@ class VehicleHardware:
             GPIO.output(RELAY_PIN, GPIO.HIGH)
             self.engine_locked = False
             logger.info("🔓 ENGINE UNLOCKED - Relay ON")
-            # SMS #2: Engine UNLOCKED (ADD THIS)
+            # SMS #2: Engine UNLOCKED
             self.send_sms("ENGINE UNLOCKED - Vehicle operational")
             return True
         except Exception as e:
@@ -276,6 +279,9 @@ class VehicleHardware:
         try:
             packet = gpsd.get_current()
             if packet.mode >= 2:
+                # Store current location for SMS
+                self.current_gps_lat = packet.lat
+                self.current_gps_lon = packet.lon
                 return {
                     'latitude': packet.lat,
                     'longitude': packet.lon,
@@ -292,13 +298,27 @@ class VehicleHardware:
         center_lng = 36.8172
         radius = 0.008
         
+        # Store simulated location
+        self.current_gps_lat = center_lat + radius * math.sin(self.sim_angle)
+        self.current_gps_lon = center_lng + radius * math.cos(self.sim_angle)
+        
         return {
-            'latitude': center_lat + radius * math.sin(self.sim_angle),
-            'longitude': center_lng + radius * math.cos(self.sim_angle),
+            'latitude': self.current_gps_lat,
+            'longitude': self.current_gps_lon,
             'speed': 40 + 20 * math.sin(self.sim_angle),
             'heading': (self.sim_angle * 57.3) % 360,
             'timestamp': datetime.now().isoformat()
         }
+    
+    def get_gps_location_for_sms(self):
+        """Get GPS location string with Google Maps link for intruder SMS"""
+        if self.current_gps_lat and self.current_gps_lon:
+            lat = abs(self.current_gps_lat)
+            lon = abs(self.current_gps_lon)
+            lat_dir = 'N' if self.current_gps_lat >= 0 else 'S'
+            lon_dir = 'E' if self.current_gps_lon >= 0 else 'W'
+            return f"\n📍 Location: https://www.google.com/maps?q={lat:.6f},{lon:.6f}\n   Coordinates: {lat:.6f}°{lat_dir}, {lon:.6f}°{lon_dir}"
+        return "\n📍 Location: Waiting for GPS fix..."
     
     def capture_face(self):
         if self.camera is None:
@@ -339,9 +359,11 @@ class VehicleHardware:
             return True
     
     def send_intruder_sms_alert(self):
-        """SMS #3: Send intruder SMS alert"""
-        message = "INTRUSION DETECTED! Check web app for more details!"
-        logger.info(f"🚨🚨🚨 SENDING INTRUDER SMS: {message} 🚨🚨🚨")
+        """SMS #3: Send intruder SMS alert WITH GPS LOCATION"""
+        # Get current GPS location
+        location_string = self.get_gps_location_for_sms()
+        message = f"INTRUSION DETECTED! Check web app for more details!{location_string}"
+        logger.info(f"🚨🚨🚨 SENDING INTRUDER SMS WITH GPS LOCATION: {message[:80]}... 🚨🚨🚨")
         return self.send_sms(message)
     
     def cleanup(self):
@@ -503,7 +525,7 @@ class VehicleSecuritySystem:
             time.sleep(GPS_UPDATE_INTERVAL)
     
     def intruder_loop(self):
-        """Check for unauthorized access and send intruder SMS"""
+        """Check for unauthorized access and send intruder SMS with GPS location"""
         last_alert_time = 0
         
         while self.running:
@@ -522,7 +544,7 @@ class VehicleSecuritySystem:
                         logger.info("🔓 Authorized user - UNLOCKING engine")
                         self.hardware.unlock_engine()  # This will send UNLOCK SMS
                 else:
-                    logger.warning("⚠️ Unauthorized face detected - Sending alert")
+                    logger.warning("⚠️ Unauthorized face detected - Sending alert with GPS location")
                     
                     # Send alert with image and SMS (rate limited to once per 30 seconds)
                     current_time = time.time()
@@ -530,7 +552,7 @@ class VehicleSecuritySystem:
                         logger.info("📸 Sending intruder alert with captured image...")
                         self.cloud.send_intruder_alert(face_image)
                         
-                        # SMS #3: Send intruder SMS
+                        # SMS #3: Send intruder SMS WITH GPS LOCATION
                         self.hardware.send_intruder_sms_alert()
                         
                         last_alert_time = current_time
@@ -538,7 +560,7 @@ class VehicleSecuritySystem:
     
     def run(self):
         logger.info("=" * 60)
-        logger.info("🚗 VEHICLE SECURITY SYSTEM STARTED")
+        logger.info("🚗 VEHICLE SECURITY SYSTEM STARTED - WITH GPS LOCATION IN INTRUDER SMS")
         logger.info(f"Cloud Server: {API_BASE_URL}")
         logger.info(f"Relay Pin: GPIO{RELAY_PIN}")
         logger.info(f"GSM: GPIO{GSM_TX_PIN} (TX), GPIO{GSM_RX_PIN} (RX)")
@@ -559,7 +581,7 @@ class VehicleSecuritySystem:
         logger.info("📱 REAL SMS alerts active for:")
         logger.info("   - SMS #1: ENGINE LOCKED (immobilized)")
         logger.info("   - SMS #2: ENGINE UNLOCKED (operational)")
-        logger.info("   - SMS #3: INTRUSION DETECTED (unauthorized face)")
+        logger.info("   - SMS #3: INTRUSION DETECTED WITH GPS LOCATION (unauthorized face)")
         logger.info("Press Ctrl+C to stop")
         
         try:
