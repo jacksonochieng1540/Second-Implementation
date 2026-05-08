@@ -29,34 +29,18 @@ class Alert(models.Model):
     
     class Meta:
         ordering = ['-timestamp']
-        
+    
     def save(self, *args, **kwargs):
-        """Save alert - SMS now handled by api/views.py to avoid duplicates"""
+        """Save alert - SMS handled by Raspberry Pi, NOT Django"""
         is_new = self.pk is None
         super().save(*args, **kwargs)
         
-        # Only send SMS for new HIGH/CRITICAL alerts
+        # DO NOT SEND SMS FROM DJANGO - Raspberry Pi handles all SMS
+        # The sms_sent flag is just for tracking, not used by Django
         if is_new and self.severity in ['HIGH', 'CRITICAL'] and not self.sms_sent:
-            self.send_sms_alert()
-
-    def send_sms_alert(self):
-        """Send SMS notification for critical alerts"""
-        if self.severity in ['HIGH', 'CRITICAL']:
-            try:
-                from .sms_handler import gsm_handler
-                
-                # Update this with your actual phone number
-                owner_phone = '+254792333250'
-                
-                message = f"🚨 ALERT: {self.title}\n{self.description[:100]}\nTime: {self.timestamp.strftime('%Y-%m-%d %H:%M:%S')}"
-                
-                success = gsm_handler.send_sms(owner_phone, message)
-                if success:
-                    self.sms_sent = True
-                    # Use update to avoid recursion
-                    Alert.objects.filter(pk=self.pk).update(sms_sent=True)
-            except Exception as e:
-                print(f"SMS error: {e}")
+            # Mark as sent to prevent future attempts (Pi already handles)
+            Alert.objects.filter(pk=self.pk).update(sms_sent=True)
+            print(f"📱 Alert {self.pk} created - SMS will be sent by Raspberry Pi")
     
     def __str__(self):
         return f"{self.severity}: {self.title} - {self.timestamp}"
