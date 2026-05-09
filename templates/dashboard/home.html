@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container">
+    <h2>Vehicle Dashboard</h2>
+    
+    {% if is_admin %}
+    <div class="alert alert-success">
+        <strong>👑 Admin Mode</strong> - You have full control over the vehicle
+    </div>
+    <a href="{% url 'admin_panel' %}" class="btn btn-primary">🚗 Go to Admin Panel</a>
+    {% elif is_kinsman %}
+    <div class="alert alert-info">
+        <strong>👨‍👦 Kinsman Mode</strong> - You can request emergency access
+    </div>
+    {% else %}
+    <div class="alert alert-secondary">
+        <strong>👤 User Mode</strong> - Limited access
+    </div>
+    {% endif %}
+    
+    <div class="row mt-4">
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header bg-primary text-white">
+                    <h4>📍 Live Vehicle Location</h4>
+                </div>
+                <div class="card-body">
+                    {% if latest_location %}
+                    <p><strong>Latitude:</strong> {{ latest_location.latitude }}</p>
+                    <p><strong>Longitude:</strong> {{ latest_location.longitude }}</p>
+                    <p><strong>Speed:</strong> {{ latest_location.speed }} km/h</p>
+                    <p><strong>Heading:</strong> {{ latest_location.heading }}°</p>
+                    <p><strong>Last Update:</strong> {{ latest_location.timestamp }}</p>
+                    {% else %}
+                    <p class="text-muted">No location data yet. Waiting for GPS...</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header bg-info text-white">
+                    <h4>📊 Vehicle Status</h4>
+                </div>
+                <div class="card-body">
+                    <p><strong>Engine Status:</strong> 
+                        <span class="badge bg-success">Operational</span>
+                    </p>
+                    <p><strong>Security System:</strong> 
+                        <span class="badge bg-success">Active</span>
+                    </p>
+                    <p><strong>Last Authentication:</strong> 
+                        <span class="text-muted">Not available</span>
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="row mt-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header bg-secondary text-white">
+                    <h4>📜 Recent Activity</h4>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted">No recent activity to display.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
