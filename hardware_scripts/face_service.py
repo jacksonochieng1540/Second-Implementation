@@ -1,4 +1,4 @@
-import cv2
+import cv2      
 import face_recognition
 
 def capture_face():
