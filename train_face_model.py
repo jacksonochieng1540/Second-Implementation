@@ -20,7 +20,7 @@ def train_model():
         print("   Create 'dataset/yourname/photo1.jpg' folders")
         return
     
-   
+    
     image_paths = []
     for ext in ['*.jpg', '*.jpeg', '*.png', '*.JPG']:
         image_paths.extend(list(dataset_path.rglob(ext)))
@@ -37,41 +37,40 @@ def train_model():
     for i, image_path in enumerate(image_paths):
         print(f"   {i+1}/{len(image_paths)}: {image_path.name}")
         
-      
+        
         name = image_path.parent.name
         
-       
+      
         image = cv2.imread(str(image_path))
         if image is None:
             continue
         
-       
         rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-       
+        
+        
         face_locations = face_recognition.face_locations(rgb)
         
         if len(face_locations) == 0:
-            print(f"      No face detected, skipping")
+            print(f"       No face detected, skipping")
             continue
         
-    
+       
         face_encodings = face_recognition.face_encodings(rgb, face_locations)
         
         for encoding in face_encodings:
             known_encodings.append(encoding)
             known_names.append(name)
-            print(f"      Encoded 1 face")
+            print(f"       Encoded 1 face")
     
     if len(known_encodings) == 0:
         print(" No faces were encoded!")
         return
     
-    
     data = {"encodings": known_encodings, "names": known_names}
     with open("encodings.pickle", "wb") as f:
         f.write(pickle.dumps(data))
     
-    print(f"\nTraining complete!")
+    print(f"\n Training complete!")
     print(f"   Total faces: {len(known_encodings)}")
     print(f"   Users: {', '.join(set(known_names))}")
     print(f"   Saved to: encodings.pickle")
