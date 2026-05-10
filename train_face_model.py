@@ -16,7 +16,7 @@ def train_model():
     dataset_path = Path("dataset")
     
     if not dataset_path.exists():
-        print("❌ Dataset folder not found!")
+        print(" Dataset folder not found!")
         print("   Create 'dataset/yourname/photo1.jpg' folders")
         return
     
@@ -26,7 +26,7 @@ def train_model():
         image_paths.extend(list(dataset_path.rglob(ext)))
     
     if len(image_paths) == 0:
-        print("❌ No images found in dataset folder!")
+        print("No images found in dataset folder!")
         return
     
     known_encodings = []
