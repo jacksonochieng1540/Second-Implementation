@@ -17,8 +17,8 @@ import requests
 from authentication.face_recognizer import face_recognizer
 
 
-# ============= RASPBERRY PI CONFIGURATION =============
-PI_API_URL = "http://10.251.159.168:5000"  # Your Raspberry Pi IP address
+
+PI_API_URL = "http://10.251.159.168:5000"  
 PI_API_KEY = "mysecurekey123"
 
 
@@ -31,7 +31,7 @@ def send_command(request):
     if command not in ['LOCK', 'UNLOCK']:
         return Response({'error': 'Invalid command'}, status=status.HTTP_400_BAD_REQUEST)
     
-    # Get or create a test user for unauthenticated requests
+    
     test_user, created = User.objects.get_or_create(
         username='testuser',
         defaults={'email': 'test@example.com'}
@@ -40,7 +40,6 @@ def send_command(request):
         test_user.set_password('testpass123')
         test_user.save()
     
-    # Use test_user if no authenticated user
     user = request.user if request.user.is_authenticated else test_user
     
     vehicle_command = VehicleCommand.objects.create(
@@ -48,14 +47,14 @@ def send_command(request):
         user=user
     )
     
-    # Log event
+
     EventLog.objects.create(
         user=user,
         event_type='COMMAND_SENT',
         description=f"User {user.username} sent {command} command"
     )
     
-    # ========== SEND COMMAND TO RASPBERRY PI ==========
+   
     try:
         response = requests.post(
             f"{PI_API_URL}/command",
@@ -64,13 +63,13 @@ def send_command(request):
             timeout=2
         )
         if response.status_code == 200:
-            print(f"✅ {command} command sent to Raspberry Pi")
+            print(f"{command} command sent to Raspberry Pi")
         else:
-            print(f"⚠️ Pi responded: {response.status_code}")
+            print(f" Pi responded: {response.status_code}")
     except Exception as e:
-        print(f"⚠️ Could not send to Pi: {e}")
+        print(f" Could not send to Pi: {e}")
     
-    print(f"📡 Command created: {command} (ID: {vehicle_command.id})")
+    print(f" Command created: {command} (ID: {vehicle_command.id})")
     
     serializer = VehicleCommandSerializer(vehicle_command)
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -87,10 +86,6 @@ def face_auth(request):
     if not face_image:
         return Response({'error': 'Face image required'}, status=400)
     
-    print("\n" + "🔐"*25)
-    print("FACE AUTHENTICATION FOR ENGINE UNLOCK")
-    print("🔐"*25)
-    
     username, confidence, message = face_recognizer.authenticate_face(face_image)
     
     if username:
@@ -102,22 +97,22 @@ def face_auth(request):
             if created:
                 user.set_password(f'{username}pass123')
                 user.save()
-                print(f"✅ Auto-created user: {username}")
+                print(f"Auto-created user: {username}")
             
-            # Create UNLOCK command in database
+
             command = VehicleCommand.objects.create(command='UNLOCK', user=user)
             
-            # Log event
+
             EventLog.objects.create(
                 user=user,
                 event_type='FACE_AUTH',
                 description=f"Face authentication successful for {user.username}"
             )
             
-            print(f"\n✅✅✅ AUTHENTICATED: {username} ({confidence:.1f}% confidence) ✅✅✅")
+            print(f"\n AUTHENTICATED: {username} ({confidence:.1f}% confidence) ")
             print(f"UNLOCK command #{command.id} created")
             
-            # ========== SEND UNLOCK TO RASPBERRY PI ==========
+            
             try:
                 print(f"\n📡 Sending UNLOCK command to Raspberry Pi at {PI_API_URL}...")
                 response = requests.post(
@@ -127,11 +122,11 @@ def face_auth(request):
                     timeout=2
                 )
                 if response.status_code == 200:
-                    print("✅ UNLOCK command sent to Pi - Relay will activate!")
+                    print(" UNLOCK command sent to Pi - Relay will activate!")
                 else:
-                    print(f"⚠️ Pi responded: {response.status_code}")
+                    print(f" Pi responded: {response.status_code}")
             except Exception as e:
-                print(f"⚠️ Could not send UNLOCK to Pi: {e}")
+                print(f"Could not send UNLOCK to Pi: {e}")
             
             return Response({
                 'success': True,
@@ -141,20 +136,20 @@ def face_auth(request):
             }, status=200)
             
         except Exception as e:
-            print(f"❌ User error: {e}")
+            print(f" User error: {e}")
     
-    # ========== INTRUDER DETECTED - SEND ALERT TO RASPBERRY PI ==========
-    print(f"\n❌❌❌ ACCESS DENIED: {message} ❌❌❌")
-    print("🚨 INTRUDER DETECTED - Sending alert to Raspberry Pi for SMS 🚨")
+  
+    print(f"\n ACCESS DENIED: {message} ")
+    print(" INTRUDER DETECTED - Sending alert to Raspberry Pi for SMS ")
     
-    # Create alert in database
+    
     alert = Alert.objects.create(
         title='UNAUTHORIZED ACCESS ATTEMPT',
         description=f'An unrecognized person attempted to access the vehicle. {message}',
         severity='HIGH'
     )
     
-    # Save the intruder face image
+
     image_saved = False
     try:
         if ',' in face_image:
@@ -166,14 +161,14 @@ def face_auth(request):
         filename = f'intruder_{alert.id}.jpg'
         alert.image.save(filename, ContentFile(image_data))
         image_saved = True
-        print(f"📸 Intruder image saved for alert {alert.id}")
+        print(f"Intruder image saved for alert {alert.id}")
     except Exception as img_error:
         print(f"Failed to save image: {img_error}")
     
-    # ========== SEND ALERT TO RASPBERRY PI FOR SMS ==========
+   
     pi_alert_sent = False
     try:
-        print(f"\n📡 Sending intruder alert to Raspberry Pi at {PI_API_URL}/intruder-alert...")
+        print(f"\n Sending intruder alert to Raspberry Pi at {PI_API_URL}/intruder-alert...")
         
         response = requests.post(
             f"{PI_API_URL}/intruder-alert",
@@ -190,17 +185,17 @@ def face_auth(request):
         
         if response.status_code == 200:
             pi_alert_sent = True
-            print("✅✅✅ Intruder alert sent to Raspberry Pi! ✅✅✅")
+            print(" Intruder alert sent to Raspberry Pi! ")
             print("📱 Raspberry Pi will send SMS with GPS location to your phone!")
         else:
-            print(f"❌ Raspberry Pi returned error: {response.status_code}")
+            print(f"Raspberry Pi returned error: {response.status_code}")
             
     except requests.exceptions.ConnectionError:
-        print(f"❌ Cannot connect to Raspberry Pi at {PI_API_URL}")
+        print(f" Cannot connect to Raspberry Pi at {PI_API_URL}")
         print("   Make sure the Pi server is running on Raspberry Pi")
         print("   SSH to Pi and run: python3 pi_server.py")
     except Exception as e:
-        print(f"❌ Error sending to Raspberry Pi: {e}")
+        print(f" Error sending to Raspberry Pi: {e}")
     
     return Response({
         'success': False,
@@ -241,7 +236,7 @@ def create_alert(request):
                 os.makedirs('media/alerts', exist_ok=True)
                 filename = f'intruder_{alert.id}.jpg'
                 alert.image.save(filename, ContentFile(image_data))
-                print(f"📸 Image saved for alert {alert.id}")
+                print(f" Image saved for alert {alert.id}")
             except Exception as img_error:
                 print(f"Failed to save image: {img_error}")
         
