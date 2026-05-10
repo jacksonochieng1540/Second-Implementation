@@ -23,7 +23,7 @@ def get_user_role(user):
     return 'user'
 
 
-# ============= EXISTING FUNCTIONS =============
+
 
 def get_latest_location(request):
     """Get latest location - API endpoint"""
@@ -57,14 +57,14 @@ def get_location_history(request):
     return JsonResponse({'locations': data})
 
 
-# ============= DASHBOARD VIEWS =============
+
 
 @login_required
 def dashboard_home(request):
     """Main dashboard view with map"""
     user_role = get_user_role(request.user)
     
-    # Get latest location for map
+   
     latest_location = VehicleLocation.objects.first()
     
     context = {
@@ -79,12 +79,12 @@ def dashboard_home(request):
 @login_required
 def admin_panel(request):
     """Admin panel for immobilize/enable engine and manage kinsmen"""
-    # Only allow admin/owner users
+    
     if get_user_role(request.user) != 'owner':
         messages.error(request, 'Access denied. Admin only.')
         return redirect('dashboard_home')
     
-    # Get kinsmen (users with role='kinsman')
+    
     kinsmen = User.objects.filter(profile__role='kinsman')
     
     context = {
@@ -110,8 +110,7 @@ def admin_login_view(request):
     return render(request, 'dashboard/admin_login.html')
 
 
-# ============= ENGINE CONTROL API - FIXED URL =============
-# FIXED: Changed from /api/send-command/ to /api/vehicle/send-command/
+
 
 @require_http_methods(["POST"])
 @csrf_exempt
@@ -119,7 +118,7 @@ def immobilize_engine(request, vehicle_id):
     """Immobilize engine - sends LOCK command to Raspberry Pi"""
     try:
         response = requests.post(
-            'http://10.251.159.57:8000/api/vehicle/send-command/',  # FIXED URL
+            'http://10.251.159.57:8000/api/vehicle/send-command/',  
             headers={'X-API-KEY': 'mysecurekey123', 'Content-Type': 'application/json'},
             json={'command': 'LOCK'},
             timeout=3
@@ -138,7 +137,7 @@ def enable_engine(request, vehicle_id):
     """Enable engine - sends UNLOCK command to Raspberry Pi"""
     try:
         response = requests.post(
-            'http://10.251.159.57:8000/api/vehicle/send-command/',  # FIXED URL
+            'http://10.251.159.57:8000/api/vehicle/send-command/',  
             headers={'X-API-KEY': 'mysecurekey123', 'Content-Type': 'application/json'},
             json={'command': 'UNLOCK'},
             timeout=3
@@ -151,13 +150,13 @@ def enable_engine(request, vehicle_id):
         return JsonResponse({'success': False, 'message': str(e)})
 
 
-# ============= EMERGENCY ACCESS API =============
+
 
 @require_http_methods(["POST"])
 @csrf_exempt
 def grant_emergency_access(request, vehicle_id):
     """Grant emergency access to a kinsman for a limited time"""
-    # Only owner can grant access
+    
     if get_user_role(request.user) != 'owner':
         return JsonResponse({'success': False, 'message': 'Permission denied'})
     
@@ -178,7 +177,7 @@ def grant_emergency_access(request, vehicle_id):
         return JsonResponse({'success': False, 'message': str(e)})
 
 
-# ============= LOCATION API =============
+
 
 @login_required
 def get_vehicle_location_api(request, vehicle_id):
