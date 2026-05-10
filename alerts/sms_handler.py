@@ -1,11 +1,8 @@
-"""
-SMS Handler - DISABLED
-All SMS are sent by the Raspberry Pi, not Django
-"""
+
 import logging
 
 logger = logging.getLogger(__name__)
-logger.info("📱 SMS Handler DISABLED - Raspberry Pi handles all SMS")
+logger.info(" SMS Handler DISABLED - Raspberry Pi handles all SMS")
 
 class GSMHandler:
     def __init__(self):
