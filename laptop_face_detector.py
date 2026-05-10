@@ -9,16 +9,13 @@ import requests
 import base64
 import time
 
-# ============= CONFIGURATION =============
-PI_API_URL = "http://10.251.159.168:5000"  # Raspberry Pi IP
+
+PI_API_URL = "http://10.251.159.168:5000"  
 DJANGO_URL = "http://127.0.0.1:8000"
 API_KEY = "mysecurekey123"
 
-print("="*60)
-print("LAPTOP FACE DETECTOR - Using built-in webcam")
-print("="*60)
 
-# Open laptop webcam
+
 print("Opening laptop webcam...")
 cap = cv2.VideoCapture(0)
 
@@ -31,7 +28,7 @@ if not cap.isOpened():
     print("❌ Cannot open laptop webcam!")
     exit()
 
-print("✅ Laptop webcam opened successfully!")
+print(" Laptop webcam opened successfully!")
 
 def authenticate_face(face_b64):
     """Authenticate face with Django"""
@@ -72,7 +69,7 @@ try:
         if ret:
             frame_count += 1
             
-            # Detect faces
+          
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
             faces = face_cascade.detectMultiScale(gray, 1.02, 3, minSize=(80, 80))
@@ -80,38 +77,38 @@ try:
             if len(faces) > 0:
                 print(f"\n[{frame_count}] 📸 Face detected!")
                 
-                # Get the largest face
+                
                 x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
                 face_roi = frame[y:y+h, x:x+w]
                 _, buffer = cv2.imencode('.jpg', face_roi)
                 face_b64 = base64.b64encode(buffer).decode()
                 
-                # Authenticate with Django
+                
                 print("   Checking authorization with Django...")
                 is_authorized = authenticate_face(face_b64)
                 
                 if is_authorized:
-                    print("✅✅✅ AUTHORIZED FACE DETECTED! ✅✅✅")
+                    print(" AUTHORIZED FACE DETECTED! ")
                 else:
-                    print("🚨🚨🚨 UNAUTHORIZED FACE DETECTED! 🚨🚨🚨")
+                    print(" UNAUTHORIZED FACE DETECTED! ")
                     
                     # Rate limit to 1 SMS per 30 seconds
                     current_time = time.time()
                     if current_time - last_alert > 30:
-                        print("📱 Sending intruder alert to Raspberry Pi...")
+                        print(" Sending intruder alert to Raspberry Pi...")
                         if send_intruder_alert_to_pi():
-                            print("✅✅✅ Pi will send SMS to your phone! ✅✅✅")
+                            print(" Pi will send SMS to your phone! ")
                             last_alert = current_time
                         else:
-                            print("❌ Could not reach Pi - make sure pi_sms_receiver.py is running")
+                            print(" Could not reach Pi - make sure pi_sms_receiver.py is running")
                     else:
                         remaining = 30 - (current_time - last_alert)
-                        print(f"⏰ Rate limited - next SMS in {remaining:.0f}s")
+                        print(f" Rate limited - next SMS in {remaining:.0f}s")
                 
-                # Wait before next detection
+                
                 time.sleep(2)
             else:
-                # No face - show progress dot
+               
                 if frame_count % 30 == 0:
                     print(".", end="", flush=True)
         
@@ -120,4 +117,4 @@ try:
 except KeyboardInterrupt:
     print("\n\nShutting down...")
     cap.release()
-    print("✅ Done")
+    print(" Done")
