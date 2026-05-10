@@ -23,7 +23,7 @@ import pigpio
 import subprocess
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-# ============= CONFIGURATION =============
+
 API_BASE_URL = "http://10.251.159.57:8000"
 API_KEY = "mysecurekey123"
 RELAY_PIN = 27
@@ -33,12 +33,12 @@ COMMAND_POLL_INTERVAL = 2
 INTRUDER_CHECK_INTERVAL = 5
 OWNER_PHONE = "+254792333250"
 
-# GSM Software Serial Pins
+
 GSM_TX_PIN = 18
 GSM_RX_PIN = 17
 GSM_BAUD = 9600
 
-# API Server config
+
 API_PORT = 5000
 API_SECRET = "mysecurekey123"
 
@@ -46,7 +46,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
-# ============= GSM SOFTWARE SERIAL CLASS =============
 class GSMSoftwareSerial:
     def __init__(self, tx_pin=18, rx_pin=17, baud=9600):
         self.tx_pin = tx_pin
@@ -75,7 +74,7 @@ class GSMSoftwareSerial:
             response = self.send_command("AT\r")
             if b'OK' in response:
                 self.is_connected = True
-                logger.info("✅ GSM connected")
+                logger.info("GSM connected")
                 self.send_command("AT+CMGF=1\r")
                 time.sleep(0.5)
                 return True
@@ -146,7 +145,7 @@ class GSMSoftwareSerial:
             self.pi.stop()
 
 
-# ============= HARDWARE SETUP =============
+
 class VehicleHardware:
     def __init__(self):
         self.engine_locked = True
@@ -198,13 +197,13 @@ class VehicleHardware:
     def lock_engine(self):
         GPIO.output(RELAY_PIN, GPIO.LOW)
         self.engine_locked = True
-        logger.info("🔒 ENGINE LOCKED")
+        logger.info(" ENGINE LOCKED")
         self.send_sms("ENGINE LOCKED - Vehicle immobilized")
     
     def unlock_engine(self):
         GPIO.output(RELAY_PIN, GPIO.HIGH)
         self.engine_locked = False
-        logger.info("🔓 ENGINE UNLOCKED")
+        logger.info(" ENGINE UNLOCKED")
         self.send_sms("ENGINE UNLOCKED - Vehicle operational")
     
     def get_gps_location(self):
@@ -256,7 +255,7 @@ class VehicleHardware:
         """Send intruder SMS with GPS location"""
         gps_str = self.get_gps_location_string()
         message = f"INTRUSION DETECTED! Check web app for more details!{gps_str}"
-        logger.info("🚨 SENDING INTRUDER SMS WITH GPS LOCATION")
+        logger.info(" SENDING INTRUDER SMS WITH GPS LOCATION")
         return self.send_sms(message)
     
     def cleanup(self):
@@ -267,7 +266,7 @@ class VehicleHardware:
         GPIO.cleanup()
 
 
-# ============= CLOUD COMMUNICATION =============
+
 class CloudComm:
     def __init__(self):
         self.headers = {'X-API-KEY': API_KEY, 'Content-Type': 'application/json'}
@@ -290,7 +289,7 @@ class CloudComm:
             pass
 
 
-# ============= INTRUDER API SERVER =============
+
 class IntruderHandler(BaseHTTPRequestHandler):
     hardware = None
     
@@ -303,12 +302,12 @@ class IntruderHandler(BaseHTTPRequestHandler):
                 return
             
             print("\n" + "#"*50)
-            print("🚨 INTRUDER ALERT FROM WEB APP!")
+            print(" INTRUDER ALERT FROM WEB APP!")
             print("#"*50)
             
             if IntruderHandler.hardware:
                 IntruderHandler.hardware.send_intruder_sms()
-                print("✅ Intruder SMS with GPS location sent!")
+                print(" Intruder SMS with GPS location sent!")
             
             self.send_response(200)
             self.end_headers()
@@ -318,7 +317,7 @@ class IntruderHandler(BaseHTTPRequestHandler):
         pass
 
 
-# ============= MAIN SYSTEM =============
+
 class VehicleSecuritySystem:
     def __init__(self):
         self.hardware = VehicleHardware()
@@ -359,17 +358,17 @@ class VehicleSecuritySystem:
         logger.info("VEHICLE SECURITY - WITH GPS LOCATION IN INTRUDER SMS")
         logger.info("="*60)
         
-        # Start threads
+     
         threading.Thread(target=self.command_loop, daemon=True).start()
         threading.Thread(target=self.gps_loop, daemon=True).start()
         
-        # Start API server for intruder alerts
-        server = HTTPServer(('0.0.0.0', API_PORT), IntruderHandler)
-        logger.info(f"🌐 API server on port {API_PORT}")
-        logger.info(f"📍 POST http://10.251.159.168:{API_PORT}/intruder-alert")
         
-        logger.info("✅ ALL SYSTEMS GO")
-        logger.info("📱 SMS WILL BE SENT FOR:")
+        server = HTTPServer(('0.0.0.0', API_PORT), IntruderHandler)
+        logger.info(f" API server on port {API_PORT}")
+        logger.info(f" POST http://10.251.159.168:{API_PORT}/intruder-alert")
+        
+        logger.info(" ALL SYSTEMS GO")
+        logger.info(" SMS WILL BE SENT FOR:")
         logger.info("   1. ENGINE LOCKED")
         logger.info("   2. ENGINE UNLOCKED")
         logger.info("   3. INTRUDER DETECTED (with GPS location)")
