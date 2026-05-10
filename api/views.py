@@ -226,7 +226,7 @@ def create_alert(request):
             location_lng=location.get('longitude')
         )
         
-        if face_image:
+        if face_image:  
             try:
                 if ',' in face_image:
                     image_data = base64.b64decode(face_image.split(',')[1])
