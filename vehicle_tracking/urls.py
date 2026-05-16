@@ -2,14 +2,14 @@ from django.urls import path
 from . import views
 
 urlpatterns = [
-    # Existing URLs
+    
     path('latest-location/', views.get_latest_location, name='latest_location'),
     path('location-history/', views.get_location_history, name='location_history'),
     
-    # Dashboard
+    
     path('', views.dashboard_home, name='dashboard_home'),
     
-    # Admin URLs
+    
     path('admin-panel/', views.admin_panel, name='admin_panel'),
     path('admin-login/', views.admin_login_view, name='admin_login'),
     path('api/immobilize/<int:vehicle_id>/', views.immobilize_engine, name='immobilize_engine'),
