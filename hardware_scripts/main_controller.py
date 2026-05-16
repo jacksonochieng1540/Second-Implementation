@@ -25,7 +25,6 @@ def capture_image():
 
 while True:
     try:
-        # 🔹 FACE AUTH
         image = capture_image()
 
         res = requests.post(f"{SERVER}/face/authenticate/", json={
@@ -41,7 +40,7 @@ while True:
             relay.engine_off()
             gsm.send_sms("+2547XXXXXXX", "Unauthorized vehicle access!")
 
-        # 🔹 GPS UPDATE
+        
         location = gps.get_location()
 
         if location:
@@ -94,7 +93,6 @@ def check_remote_command():
         relay.engine_on()
         gsm.send_sms("+2547XXXXXXX", "Vehicle enabled remotely!")
 
-    # ✅ Mark command as executed
     requests.post(
         f"{SERVER}/vehicle/command-done/",
         json={"id": cmd_id},
