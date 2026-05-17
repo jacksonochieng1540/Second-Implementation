@@ -1,8 +1,3 @@
-"""
-GPS Utilities for Vehicle Tracking
-Handles NMEA parsing and location updates
-"""
-
 import re
 import logging
 from datetime import datetime
@@ -10,16 +5,13 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 class GPSParser:
-    """Parse NMEA GPS data from Raspberry Pi"""
     
     @staticmethod
     def parse_gga(sentence):
-        """Parse GGA sentence for location data"""
         parts = sentence.split(',')
         
-        if len(parts) >= 10 and parts[6] in ['1', '2']:  # 1=GPS fix, 2=DGPS fix
+        if len(parts) >= 10 and parts[6] in ['1', '2']:  
             try:
-                # Parse latitude (DDMM.MMMMM)
                 lat_raw = parts[2]
                 lat_dir = parts[3]
                 if lat_raw and lat_dir:
@@ -29,7 +21,7 @@ class GPSParser:
                     if lat_dir == 'S':
                         latitude = -latitude
                 
-                # Parse longitude (DDDMM.MMMMM)
+               
                 lon_raw = parts[4]
                 lon_dir = parts[5]
                 if lon_raw and lon_dir:
@@ -39,10 +31,9 @@ class GPSParser:
                     if lon_dir == 'W':
                         longitude = -longitude
                 
-                # Altitude
+               
                 altitude = float(parts[9]) if parts[9] else 0
-                
-                # Satellites
+         
                 satellites = int(parts[7]) if parts[7] else 0
                 
                 return {
@@ -59,16 +50,15 @@ class GPSParser:
     
     @staticmethod
     def parse_rmc(sentence):
-        """Parse RMC sentence for speed and heading"""
         parts = sentence.split(',')
         
-        if len(parts) >= 8 and parts[2] == 'A':  # A = Active fix
+        if len(parts) >= 8 and parts[2] == 'A':  
             try:
-                # Speed in knots
+           
                 speed_knots = float(parts[7]) if parts[7] else 0
                 speed_kmh = speed_knots * 1.852
                 
-                # Heading
+               
                 heading = float(parts[8]) if parts[8] else 0
                 
                 return {
