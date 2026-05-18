@@ -35,12 +35,11 @@ class Alert(models.Model):
         is_new = self.pk is None
         super().save(*args, **kwargs)
         
-        # DO NOT SEND SMS FROM DJANGO - Raspberry Pi handles all SMS
-        # The sms_sent flag is just for tracking, not used by Django
+       
         if is_new and self.severity in ['HIGH', 'CRITICAL'] and not self.sms_sent:
-            # Mark as sent to prevent future attempts (Pi already handles)
+          
             Alert.objects.filter(pk=self.pk).update(sms_sent=True)
-            print(f"📱 Alert {self.pk} created - SMS will be sent by Raspberry Pi")
+            print(f" Alert {self.pk} created - SMS will be sent by Raspberry Pi")
     
     def __str__(self):
         return f"{self.severity}: {self.title} - {self.timestamp}"
