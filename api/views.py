@@ -114,7 +114,7 @@ def face_auth(request):
             
             
             try:
-                print(f"\n📡 Sending UNLOCK command to Raspberry Pi at {PI_API_URL}...")
+                print(f"\n Sending UNLOCK command to Raspberry Pi at {PI_API_URL}...")
                 response = requests.post(
                     f"{PI_API_URL}/command",
                     headers={'X-API-KEY': PI_API_KEY, 'Content-Type': 'application/json'},
@@ -186,7 +186,7 @@ def face_auth(request):
         if response.status_code == 200:
             pi_alert_sent = True
             print(" Intruder alert sent to Raspberry Pi! ")
-            print("📱 Raspberry Pi will send SMS with GPS location to your phone!")
+            print(" Raspberry Pi will send SMS with GPS location to your phone!")
         else:
             print(f"Raspberry Pi returned error: {response.status_code}")
             
