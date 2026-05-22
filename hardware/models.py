@@ -31,4 +31,4 @@ class EventLog(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
     
     def __str__(self):
-        return f"{self.event_type} - {self.timestamp}"
+        return f"{self.event_type} - {self.timestamp}"    
