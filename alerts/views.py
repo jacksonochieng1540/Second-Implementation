@@ -20,3 +20,5 @@ def alert_list(request):
         })
     return Response(alerts_data)
 
+
+
