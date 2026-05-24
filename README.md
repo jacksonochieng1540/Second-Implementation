@@ -6,11 +6,11 @@
 ![OpenCV](https://img.shields.io/badge/OpenCV-4.8-blue.svg)
 ![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-## 📌 Overview
+##  Overview
 
 A comprehensive vehicle security system that combines **facial recognition**, **real-time GPS tracking**, **GSM SMS alerts**, and **remote engine control** to provide complete vehicle protection. The system authenticates drivers using facial recognition before allowing engine start, tracks vehicle location continuously, and enables the owner to remotely immobilize the engine from anywhere in the world.
 
-### 🎯 Key Features
+###  Key Features
 
 - **Face Recognition Authentication** - Authorized drivers are identified using OpenCV
 - **Real-Time GPS Tracking** - Live vehicle location every 3 seconds
@@ -26,16 +26,16 @@ A comprehensive vehicle security system that combines **facial recognition**, **
 ![Admin Dashboard](screenshots/admin_dashboard.png)
 
 ### SMS Alert Example
-🚨 INTRUSION DETECTED!
-📍 Location: -1.095555, 37.013904
-📍 Google Maps: https://maps.google.com/?q=-1.095555,37.013904
+ INTRUSION DETECTED!
+ Location: -1.095555, 37.013904
+ Google Maps: https://maps.google.com/?q=-1.095555,37.013904
 Time: 2026-05-20 17:24:00
 
 ### Face Authentication
 ![Face Auth](screenshots/face_auth.png)
 
 
-## 🔧 Hardware Components
+## Hardware Components
 
 | Component | Model | Purpose | Approx. Cost (KES) |
 |-----------|-------|---------|-------------------|
@@ -59,31 +59,4 @@ Time: 2026-05-20 17:24:00
 | Database | SQLite3 | Data storage |
 | SMS | GSM Module (SIM800L) | Text alerts |
 
-## 📁 Project Structure
-SmartVehicleProject/
-├── api/ # API endpoints for Pi communication
-│ ├── views.py # Face auth, send commands
-│ ├── models.py # VehicleCommand, EventLog
-│ └── urls.py
-├── hardware/ # Hardware communication endpoints
-│ ├── views.py # Receive GPS, get commands
-│ └── urls.py
-├── vehicle_tracking/ # Vehicle location management
-│ ├── views.py # Location API, dashboard views
-│ ├── models.py # VehicleLocation
-│ └── urls.py
-├── alerts/ # Security alerts management
-│ ├── views.py # Alert creation and retrieval
-│ └── models.py # Alert model
-├── authentication/ # User authentication
-│ ├── face_recognizer.py # OpenCV face recognition
-│ └── views.py # Login, register
-├── templates/ # HTML templates
-│ ├── dashboard/ # Web dashboard
-│ └── login.html
-├── media/ # Uploaded images (intruder photos)
-├── static/ # CSS, JS, images
-├── hardware_scripts/ # Raspberry Pi scripts
-│ └── vehicle_security.py # Main Pi script
-├── requirements.txt # Python dependencies
-└── manage.py # Django management script
+
