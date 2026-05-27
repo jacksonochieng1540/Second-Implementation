@@ -20,7 +20,7 @@ A comprehensive vehicle security system that combines **facial recognition**, **
 - **Intruder Capture** - Photos of unauthorized access attempts
 - **Emergency Access** - Temporary access for family members
 
-## 📸 System Demo
+##  System Demo
 
 ### Web Dashboard - Admin Panel
 ![Admin Dashboard](screenshots/admin_dashboard.png)
@@ -47,7 +47,7 @@ Time: 2026-05-20 17:24:00
 | Power Supply | 5V 3A | Raspberry Pi power | 1,000 |
 | **Total** | | | **~17,000 KES** |
 
-## 💻 Software Stack
+##  Software Stack
 
 | Layer | Technology | Purpose |
 |-------|------------|---------|
