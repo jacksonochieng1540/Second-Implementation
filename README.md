@@ -23,7 +23,8 @@ A comprehensive vehicle security system that combines **facial recognition**, **
 ##  System Demo
 
 ### Web Dashboard - Admin Panel
-![Admin Dashboard](screenshots/admin_dashboard.png)
+<img width="1308" height="655" alt="WhatsApp Image 2026-05-08 at 20 07 34" src="https://github.com/user-attachments/assets/c10470da-9a7b-4c63-a90b-bb846f8f9b1f" />
+
 
 ### SMS Alert Example
  INTRUSION DETECTED!
@@ -32,7 +33,8 @@ A comprehensive vehicle security system that combines **facial recognition**, **
 Time: 2026-05-20 17:24:00
 
 ### Face Authentication
-![Face Auth](screenshots/face_auth.png)
+<img width="1308" height="655" alt="WhatsApp Image 2026-05-08 at 20 21 20" src="https://github.com/user-attachments/assets/460fd615-b169-45bd-9218-1bb68b39afe7" />
+
 
 
 ## Hardware Components
@@ -61,4 +63,8 @@ Time: 2026-05-20 17:24:00
 
 circuit diagram
 <img width="1200" height="1600" alt="image" src="https://github.com/user-attachments/assets/5675eaaa-b67f-4f27-8fbe-668fdde0b27b" />
+
+The sms ouput sample in all the three scenarios:
+<img width="713" height="274" alt="image" src="https://github.com/user-attachments/assets/9eaf108f-ec69-4fd6-b3a8-6041b8334073" />
+
 
