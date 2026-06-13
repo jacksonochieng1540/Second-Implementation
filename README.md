@@ -1,11 +1,4 @@
 # Smart Vehicle Tracking and Anti-Theft System using Facial Recognition, GPS and GSM
-
-![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)
-![Django](https://img.shields.io/badge/Django-4.2-green.svg)
-![Raspberry Pi](https://img.shields.io/badge/Raspberry%20Pi-4B-red.svg)
-![OpenCV](https://img.shields.io/badge/OpenCV-4.8-blue.svg)
-![License](https://img.shields.io/badge/License-MIT-yellow.svg)
-
 ##  Overview
 
 A comprehensive vehicle security system that combines **facial recognition**, **real-time GPS tracking**, **GSM SMS alerts**, and **remote engine control** to provide complete vehicle protection. The system authenticates drivers using facial recognition before allowing engine start, tracks vehicle location continuously, and enables the owner to remotely immobilize the engine from anywhere in the world.
