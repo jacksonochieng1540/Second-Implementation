@@ -59,4 +59,6 @@ Time: 2026-05-20 17:24:00
 | Database | SQLite3 | Data storage |
 | SMS | GSM Module (SIM800L) | Text alerts |
 
+circuit diagram
+<img width="1200" height="1600" alt="image" src="https://github.com/user-attachments/assets/5675eaaa-b67f-4f27-8fbe-668fdde0b27b" />
 
